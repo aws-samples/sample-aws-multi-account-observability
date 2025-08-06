@@ -491,8 +491,4 @@ For issues and questions:
 
 ---
 
-<<<<<<< HEAD
 **Agency 360 Analytics** - Comprehensive AWS multi-account visibility and analytics platform
-=======
-**AWS Multi-Account Observability Platform** - Enterprise-scale AWS monitoring and analytics
->>>>>>> e92a3fd (Updated Readme)
