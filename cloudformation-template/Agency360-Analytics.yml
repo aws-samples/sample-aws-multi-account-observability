@@ -1,0 +1,939 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Agency 360 - Analytics Account, S3 Bucket, KMS, Lambda and VPC with Aurora PostgreSQL RDS and Security Groups for QuickSight
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 bucket to create
+    Default: agency360-data-bucket
+
+  SenderAccounts:
+    Type: CommaDelimitedList
+    Description: List of AWS account IDs that can send data (comma-separated)
+    Default: "123456789012"
+
+Resources:
+  # KMS Key for encryption
+  Agency360KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for Agency360 encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: Allow sender accounts to decrypt and encrypt
+            Effect: Allow
+            Principal:
+              AWS: !Split
+                - ','
+                - !Sub
+                  - 'arn:aws:iam::${inner}:root'
+                  - inner: !Join
+                    - ':root,arn:aws:iam::'
+                    - !Ref SenderAccounts
+            Action:
+              - "kms:Decrypt"
+              - "kms:Encrypt"
+              - "kms:ReEncrypt*"
+              - "kms:GenerateDataKey"
+              - "kms:GenerateDataKeyWithoutPlaintext"
+              - "kms:DescribeKey"
+            Resource: "*"
+
+  Agency360KMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/agency360-key
+      TargetKeyId: !Ref Agency360KMSKey
+
+  # VPC Configuration
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: Agency360-VPC
+          
+  # VPC Flow Logs
+  VPCFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogRole.Arn
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Sub "/aws/vpc/flowlogs/${VPC}"
+      ResourceId: !Ref VPC
+      ResourceType: VPC
+      TrafficType: ALL
+
+  VPCFlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VPCFlowLogPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vpc/flowlogs/*"
+
+  # Private Subnets for RDS and Lambda
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Agency360-Private-Subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.5.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Agency360-Private-Subnet-2
+
+  PrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.6.0/24
+      AvailabilityZone: !Select [2, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Agency360-Private-Subnet-3
+
+  # Security Groups with descriptions
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS Aurora PostgreSQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16
+          Description: Allow PostgreSQL access from VPC
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+          Description: Allow PostgreSQL access from anywhere (for testing)
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/32
+          Description: Allow HTTPS outbound traffic
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16
+          Description: Allow PostgreSQL outbound traffic
+      Tags:
+        - Key: Name
+          Value: Agency360-RDS-SG
+
+  QuickSightSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for QuickSight VPC endpoint
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS access from VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: Agency360-QuickSight-SG
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda functions
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS outbound for AWS API calls
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16
+          Description: Allow PostgreSQL access to RDS
+      Tags:
+        - Key: Name
+          Value: Agency360-Lambda-SG
+
+  # Route Table for Private Subnets
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Agency360-Private-RouteTable
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet3
+      RouteTableId: !Ref PrivateRouteTable
+
+
+
+  # QuickSight VPC Endpoint
+  QuickSightVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.quicksight-website
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      SecurityGroupIds:
+        - !Ref QuickSightSecurityGroup
+      PrivateDnsEnabled: false
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Aurora PostgreSQL
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Tags:
+        - Key: Name
+          Value: Agency360-DB-SubnetGroup
+
+  # Enhanced monitoring role for RDS
+  RDSEnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+
+  # Aurora PostgreSQL Cluster with encryption and IAM auth
+  AuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      # Removed DBClusterIdentifier to allow CloudFormation to generate a name
+      Engine: aurora-postgresql
+      EngineVersion: '15.4'
+      Port: 5432
+      DatabaseName: core
+      MasterUsername: postgres
+      ManageMasterUserPassword: true
+      EnableHttpEndpoint: true
+      EnableIAMDatabaseAuthentication: true
+      StorageEncrypted: true
+      KmsKeyId: !Ref Agency360KMSKey
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 16
+      BackupRetentionPeriod: 7
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref RDSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-coredb-cluster"
+
+  AuroraDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBClusterIdentifier: !Ref AuroraDBCluster
+      DBInstanceClass: db.serverless
+      PubliclyAccessible: false
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt RDSEnhancedMonitoringRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-coredb-instance"
+
+  # IAM Managed Policies with constrained permissions
+  Agency360ReceiverPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      # Removed ManagedPolicyName to allow CloudFormation to generate a name
+      Description: Policy for Agency360 Receiver Lambda function
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3Access
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub "${S3Bucket.Arn}/scripts/receiver.py"
+          - Sid: S3DataAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:DeleteObject
+            Resource:
+              - !Sub "${S3Bucket.Arn}/data/*"
+          - Sid: S3ListAccess
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt S3Bucket.Arn
+            Condition:
+              StringLike:
+                s3:prefix: "data/*"
+          - Sid: RDSAccess
+            Effect: Allow
+            Action:
+              - rds-data:ExecuteStatement
+              - rds-data:BatchExecuteStatement
+              - rds-data:BeginTransaction
+              - rds-data:CommitTransaction
+              - rds-data:RollbackTransaction
+            Resource: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
+          - Sid: SecretsManagerAccess
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !GetAtt AuroraDBCluster.MasterUserSecret.SecretArn
+          - Sid: KMSAccess
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: !GetAtt Agency360KMSKey.Arn
+          - Sid: AccountAccess
+            Effect: Allow
+            Action:
+              - account:GetContactInformation
+            Resource: !Sub "arn:aws:account::${AWS::AccountId}:account"
+          - Sid: LogsAccess
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/agency360-receiver*"
+          - Sid: SQSAccess
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt LambdaDLQ.Arn
+
+  Agency360SenderPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Policy for Agency360 Sender Lambda function
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3BucketAccess
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - !GetAtt S3Bucket.Arn
+            Condition:
+              StringLike:
+                s3:prefix: 
+                  - "data/*"
+                  - "scripts/sender.py"
+          - Sid: S3ObjectAccess
+            Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource:
+              - !Sub "${S3Bucket.Arn}/data/*"
+          - Sid: S3ScriptReadOnly
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub "${S3Bucket.Arn}/scripts/sender.py"
+          - Sid: STSAccess
+            Effect: Allow
+            Action:
+              - sts:GetCallerIdentity
+            Resource: "*"
+          - Sid: AccountAccess
+            Effect: Allow
+            Action:
+              - account:GetContactInformation
+              - account:GetAlternateContact
+              - account:GetAccountInformation
+              - account:GetPrimaryEmail
+              - account:GetRegionOptStatus
+              - account:ListRegions
+            Resource: "*"
+          - Sid: CostExplorerAccess
+            Effect: Allow
+            Action:
+              - ce:GetCostAndUsage
+              - ce:GetCostForecast
+              - ce:GetAnomalies
+              - ce:GetAnomalyMonitors
+              - ce:GetCostCategories
+              - ce:GetDimensionValues
+              - ce:GetPreferences
+            Resource: "*"
+          - Sid: ConfigAccess
+            Effect: Allow
+            Action:
+              - config:GetResourceConfigHistory
+              - config:SelectResourceConfig
+              - config:DescribeConfigurationRecorders
+              - config:DescribeConfigurationRecorderStatus
+              - config:DescribeConfigRules
+              - config:GetComplianceDetailsByConfigRule
+            Resource: "*"
+          - Sid: SecurityHubAccess
+            Effect: Allow
+            Action:
+              - securityhub:GetFindings
+              - securityhub:DescribeHub
+              - securityhub:GetEnabledStandards
+              - securityhub:ListConfigurationPolicies
+            Resource: "*"
+          - Sid: GuardDutyAccess
+            Effect: Allow
+            Action:
+              - guardduty:ListDetectors
+              - guardduty:ListFindings
+              - guardduty:GetFindings
+            Resource: "*"
+          - Sid: IAMReadAccess
+            Effect: Allow
+            Action:
+              - iam:ListUsers
+              - iam:ListRoles
+              - iam:ListPolicies
+              - iam:ListMFADevices
+              - iam:ListAccessKeys
+            Resource: "*"
+          - Sid: KMSReadAccess
+            Effect: Allow
+            Action:
+              - kms:ListKeys
+              - kms:DescribeKey
+              - kms:GetKeyRotationStatus
+            Resource: "*"
+          - Sid: KMSDecryptAccess
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
+          - Sid: KMSEncryptAccess
+            Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:ReEncrypt*
+            Resource: !GetAtt Agency360KMSKey.Arn
+          - Sid: WAFAccess
+            Effect: Allow
+            Action:
+              - wafv2:ListWebACLs
+              - wafv2:GetWebACL
+              - wafv2:ListResourcesForWebACL
+              - wafv2:GetLoggingConfiguration
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: 
+                  - !Ref AWS::Region
+                  - "us-east-1"
+          - Sid: CloudTrailAccess
+            Effect: Allow
+            Action:
+              - cloudtrail:DescribeTrails
+              - cloudtrail:GetTrailStatus
+              - cloudtrail:LookupEvents
+            Resource: "*"
+          - Sid: SecretsManagerReadAccess
+            Effect: Allow
+            Action:
+              - secretsmanager:ListSecrets
+              - secretsmanager:DescribeSecret
+            Resource: "*"
+          - Sid: CertificateManagerAccess
+            Effect: Allow
+            Action:
+              - acm:ListCertificates
+              - acm:DescribeCertificate
+            Resource: "*"
+          - Sid: InspectorAccess
+            Effect: Allow
+            Action:
+              - inspector2:ListFindings
+            Resource: "*"
+          - Sid: SSMAccess
+            Effect: Allow
+            Action:
+              - ssm:DescribeInstanceInformation
+              - ssm:GetInventory
+            Resource: "*"
+          - Sid: SupportAccess
+            Effect: Allow
+            Action:
+              - support:DescribeTrustedAdvisorChecks
+              - support:DescribeTrustedAdvisorCheckResult
+            Resource: "*"
+          - Sid: ApplicationSignalsAccess
+            Effect: Allow
+            Action:
+              - application-signals:ListServices
+            Resource: "*"
+          - Sid: ResilienceHubAccess
+            Effect: Allow
+            Action:
+              - resiliencehub:ListApps
+              - resiliencehub:DescribeApp
+              - resiliencehub:DescribeResiliencyPolicy
+              - resiliencehub:ListTestRecommendations
+              - resiliencehub:DescribeAppVersionResourcesResolutionStatus
+            Resource: "*"
+          - Sid: HealthAccess
+            Effect: Allow
+            Action:
+              - health:DescribeEvents
+              - health:DescribeEventDetails
+              - health:DescribeAffectedEntities
+            Resource: "*"
+          - Sid: MarketplaceAccess
+            Effect: Allow
+            Action:
+              - aws-marketplace:GetEntitlements
+            Resource: "*"
+          - Sid: EC2Access
+            Effect: Allow
+            Action:
+              - ec2:DescribeRegions
+            Resource: "*"
+          - Sid: LogsAccess
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/agency360-sender*"
+          - Sid: SQSAccess
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt LambdaDLQ.Arn
+
+  # Lambda Execution Roles
+  Agency360LambdaReceiverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # Removed RoleName to allow CloudFormation to generate a name
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Ref Agency360ReceiverPolicy
+
+  Agency360LambdaSenderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # Removed RoleName to allow CloudFormation to generate a name
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Ref Agency360SenderPolicy
+
+  # Dead Letter Queue for Lambda functions
+  LambdaDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      # Removed QueueName to allow CloudFormation to generate a name
+      KmsMasterKeyId: !Ref Agency360KMSKey
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  # S3 Access Logs Bucket
+  S3AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Removed BucketName to allow CloudFormation to generate a name
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref Agency360KMSKey
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # S3 Bucket with security configurations
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Removed BucketName to allow CloudFormation to generate a name
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref Agency360KMSKey
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: access-logs/
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-s3-bucket"
+
+  # Permission for S3 to invoke Receiver Lambda
+  ReceiverLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Agency360ReceiverFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt S3Bucket.Arn
+
+  # Lambda Functions with VPC and DLQ configuration
+  Agency360ReceiverFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      # Removed FunctionName to allow CloudFormation to generate a name
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt Agency360LambdaReceiverRole.Arn
+      Timeout: 900
+      MemorySize: 10240
+      ReservedConcurrentExecutions: 10
+      # Removed VPC configuration as requested
+      DeadLetterConfig:
+        TargetArn: !GetAtt LambdaDLQ.Arn
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          BUCKET: !Ref S3Bucket
+          DB_NAME: core
+          AURORA_CLUSTER_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
+          AURORA_SECRET_ARN: !GetAtt AuroraDBCluster.MasterUserSecret.SecretArn
+          ANALYTICS_KMS_KEY: !GetAtt Agency360KMSKey.Arn
+      KmsKeyArn: !GetAtt Agency360KMSKey.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import tempfile
+          import importlib.util
+          import sys
+          import os
+          from typing import Any, Dict
+
+          BUCKET = os.environ.get("BUCKET")
+
+          def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+              bucket_name = BUCKET
+              script_key = 'scripts/receiver.py' #Comment this line to trigger the sender.py
+              
+              s3_client = boto3.client('s3')
+              response = s3_client.get_object(Bucket=bucket_name, Key=script_key)
+              script_content = response['Body'].read().decode('utf-8')
+              
+              # Write to temporary file and import securely
+              with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+                  temp_file.write(script_content)
+                  temp_file.flush()
+                  temp_file_path = temp_file.name
+              
+              try:
+                  spec = importlib.util.spec_from_file_location("dynamic_module", temp_file_path)
+                  module = importlib.util.module_from_spec(spec)
+                  sys.modules[spec.name] = module
+                  spec.loader.exec_module(module)
+                  
+                  result = module.lambda_handler(event, context)
+                  return result
+              finally:
+                  os.unlink(temp_file_path)
+
+  Agency360SenderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      # Removed FunctionName to allow CloudFormation to generate a name
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt Agency360LambdaSenderRole.Arn
+      Timeout: 900
+      MemorySize: 10240
+      ReservedConcurrentExecutions: 10
+      # Removed VPC configuration as requested
+      DeadLetterConfig:
+        TargetArn: !GetAtt LambdaDLQ.Arn
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          BUCKET: !Ref S3Bucket
+          ANALYTICS_KMS_KEY: !GetAtt Agency360KMSKey.Arn
+      KmsKeyArn: !GetAtt Agency360KMSKey.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import tempfile
+          import importlib.util
+          import sys
+          import os
+          from typing import Any, Dict
+
+          BUCKET = os.environ.get("BUCKET")
+
+          def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+              bucket_name = BUCKET
+              
+              script_key = 'scripts/sender.py' #Uncomment this line to trigger the sender.py
+              
+              s3_client = boto3.client('s3')
+              response = s3_client.get_object(Bucket=bucket_name, Key=script_key)
+              script_content = response['Body'].read().decode('utf-8')
+              
+              # Write to temporary file and import securely
+              with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+                  temp_file.write(script_content)
+                  temp_file.flush()
+                  temp_file_path = temp_file.name
+              
+              try:
+                  spec = importlib.util.spec_from_file_location("dynamic_module", temp_file_path)
+                  module = importlib.util.module_from_spec(spec)
+                  sys.modules[spec.name] = module
+                  spec.loader.exec_module(module)
+                  
+                  result = module.lambda_handler(event, context)
+                  return result
+              finally:
+                  os.unlink(temp_file_path)
+
+  # EventBridge Rule for Sender (Daily at 2 AM)
+  SenderScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      # Removed Name to allow CloudFormation to generate a name
+      Description: Trigger Agency360 Sender Lambda daily at 2 AM
+      ScheduleExpression: cron(0 2 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt Agency360SenderFunction.Arn
+          Id: Agency360SenderTarget
+    DependsOn: Agency360SenderFunction
+
+  # Permission for EventBridge to invoke Sender Lambda
+  SenderLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Agency360SenderFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SenderScheduleRule.Arn
+    DependsOn: Agency360SenderFunction
+
+  # S3 Bucket Policy with constrained access
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "DenyInsecureConnections"
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt S3Bucket.Arn
+              - !Sub "${S3Bucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+          - Sid: "AllowOwnerAccess"
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: 
+              - "s3:GetBucketLocation"
+              - "s3:ListBucket"
+            Resource: !GetAtt S3Bucket.Arn
+          - Sid: "AllowOwnerObjectAccess"
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: 
+              - "s3:GetObject"
+              - "s3:PutObject"
+              - "s3:DeleteObject"
+            Resource: !Sub "${S3Bucket.Arn}/*"
+          - Sid: "AllowSenderAccountsGetSenderScript"
+            Effect: Allow
+            Principal:
+              AWS: !Split
+                - ','
+                - !Sub
+                  - 'arn:aws:iam::${inner}:root'
+                  - inner: !Join
+                    - ':root,arn:aws:iam::'
+                    - !Ref SenderAccounts
+            Action: "s3:GetObject"
+            Resource: !Sub "${S3Bucket.Arn}/scripts/sender.py"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "true"
+          - Sid: "AllowSenderAccountsDataAccess"
+            Effect: Allow
+            Principal:
+              AWS: !Split
+                - ','
+                - !Sub
+                  - 'arn:aws:iam::${inner}:root'
+                  - inner: !Join
+                    - ':root,arn:aws:iam::'
+                    - !Ref SenderAccounts
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+            Resource: !Sub "${S3Bucket.Arn}/data/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "true"
+          - Sid: "AllowSenderAccountsListBucket"
+            Effect: Allow
+            Principal:
+              AWS: !Split
+                - ','
+                - !Sub
+                  - 'arn:aws:iam::${inner}:root'
+                  - inner: !Join
+                    - ':root,arn:aws:iam::'
+                    - !Ref SenderAccounts
+            Action: "s3:ListBucket"
+            Resource: !GetAtt S3Bucket.Arn
+            Condition:
+              Bool:
+                "aws:SecureTransport": "true"
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    
+  QuickSightVPCEndpointId:
+    Description: QuickSight VPC Endpoint ID
+    Value: !Ref QuickSightVPCEndpoint
+  
+  QuickSightSecurityGroup:
+    Description: QuickSight VPC Security Group
+    Value: !Ref QuickSightSecurityGroup
+
+  AuroraClusterArn:
+    Description: Aurora PostgreSQL Cluster ARN
+    Value: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
+
+  AuroraEndpoint:
+    Description: Aurora PostgreSQL Cluster Endpoint
+    Value: !GetAtt AuroraDBCluster.Endpoint.Address
+
+  AuroraSecretArn:
+    Description: Aurora master password secret ARN
+    Value: !GetAtt AuroraDBCluster.MasterUserSecret.SecretArn
+
+  KMSKeyArn:
+    Description: KMS Key ARN for encryption
+    Value: !GetAtt Agency360KMSKey.Arn
+
+  DLQArn:
+    Description: Dead Letter Queue ARN
+    Value: !GetAtt LambdaDLQ.Arn
+
+  ReceiverLambdaFunctionArn:
+    Description: Receiver Lambda Function ARN
+    Value: !GetAtt Agency360ReceiverFunction.Arn
+
+  SenderLambdaFunctionArn:
+    Description: Sender Lambda Function ARN
+    Value: !GetAtt Agency360SenderFunction.Arn
+
+  S3BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref S3Bucket

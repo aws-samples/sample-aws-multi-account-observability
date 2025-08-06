@@ -1,0 +1,367 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Agency360 - Sender Account with Lambda function that hthat extracts relevant data from this account and sends it to the Analytics account for metric aggregation. Eventbridge configured to run every day at 0100
+
+Parameters:
+  Region:
+    Type: String
+    Default: ap-southeast-1
+    Description: AWS Region for the Lambda function
+    
+  AnalyticsAccount:
+    Type: String
+    Default: 'ANALYTICS_ACCOUNT_ID'
+    Description: Analytics Account ID
+    
+  S3Bucket:
+    Type: String
+    Default: 'agency360-data-bucket'
+    Description: S3 bucket for storing data
+    
+  AnalyticsKMSKey:
+    Type: String
+    Default: 'arn:aws:kms:ap-southeast-1:ANALYTICS_ACCOUNT_ID:key/KEY_ID'
+    Description: Analytics account KMS key ARN for S3 encryption
+
+Resources:
+  Agency360DLQ:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      # Removed QueueName to allow CloudFormation to generate a name
+      KmsMasterKeyId: alias/aws/sqs
+
+  Agency360SenderPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      # Removed ManagedPolicyName to allow CloudFormation to generate a name
+      Description: Policy for Agency360 Sender Lambda function
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3BucketAccess
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::${S3Bucket}
+          - Sid: S3ObjectAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::${S3Bucket}/data/*
+          - Sid: S3ScriptReadOnly
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub arn:aws:s3:::${S3Bucket}/scripts/sender.py
+          - Sid: STSAccess
+            Effect: Allow
+            Action:
+              - sts:GetCallerIdentity
+            Resource: "*" # This is acceptable as GetCallerIdentity doesn't support resource-level permissions
+          - Sid: AccountAccess
+            Effect: Allow
+            Action:
+              - account:GetContactInformation
+              - account:GetAlternateContact
+              - account:GetAccountInformation
+              - account:GetPrimaryEmail
+              - account:GetRegionOptStatus
+              - account:ListRegions
+            Resource: !Sub "arn:aws:account::${AWS::AccountId}:account"
+          - Sid: CostExplorerAccess
+            Effect: Allow
+            Action:
+              - ce:GetCostAndUsage
+              - ce:GetCostForecast
+              - ce:GetAnomalies
+              - ce:GetAnomalyMonitors
+              - ce:GetCostCategories
+              - ce:GetDimensionValues
+              - ce:GetPreferences
+            Resource: "*" # Cost Explorer APIs don't support resource-level permissions
+          - Sid: ConfigAccess
+            Effect: Allow
+            Action:
+              - config:GetResourceConfigHistory
+              - config:SelectResourceConfig
+              - config:DescribeConfigurationRecorders
+              - config:DescribeConfigurationRecorderStatus
+              - config:DescribeConfigRules
+              - config:GetComplianceDetailsByConfigRule
+            Resource: "*"
+          - Sid: SecurityHubAccess
+            Effect: Allow
+            Action:
+              - securityhub:GetFindings
+              - securityhub:DescribeHub
+              - securityhub:GetEnabledStandards
+              - securityhub:ListConfigurationPolicies
+            Resource: "*"
+          - Sid: GuardDutyAccess
+            Effect: Allow
+            Action:
+              - guardduty:ListDetectors
+              - guardduty:ListFindings
+              - guardduty:GetFindings
+            Resource: "*"
+          - Sid: IAMAccess
+            Effect: Allow
+            Action:
+              - iam:ListUsers
+              - iam:ListRoles
+              - iam:ListPolicies
+              - iam:ListMFADevices
+              - iam:ListAccessKeys
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:*"
+          - Sid: KMSAccess
+            Effect: Allow
+            Action:
+              - kms:ListKeys
+              - kms:DescribeKey
+              - kms:GetKeyRotationStatus
+            Resource: !Sub "arn:aws:kms:${Region}:${AWS::AccountId}:key/*"
+          - Sid: KMSDecryptAccess
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: 
+              - !Ref AnalyticsKMSKey
+              - "arn:aws:kms:*:*:alias/aws/sqs"
+          - Sid: KMSEncryptAccess
+            Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:ReEncrypt*
+            Resource: !Ref AnalyticsKMSKey
+          - Sid: WAFAccess
+            Effect: Allow
+            Action:
+              - wafv2:ListWebACLs
+              - wafv2:GetWebACL
+              - wafv2:ListResourcesForWebACL
+              - wafv2:GetLoggingConfiguration
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: 
+                  - !Ref Region
+                  - "us-east-1"
+          - Sid: CloudTrailAccess
+            Effect: Allow
+            Action:
+              - cloudtrail:DescribeTrails
+              - cloudtrail:GetTrailStatus
+              - cloudtrail:LookupEvents
+            Resource: "*"
+          - Sid: SecretsManagerAccess
+            Effect: Allow
+            Action:
+              - secretsmanager:ListSecrets
+              - secretsmanager:DescribeSecret
+            Resource: "*"
+          - Sid: CertificateManagerAccess
+            Effect: Allow
+            Action:
+              - acm:ListCertificates
+              - acm:DescribeCertificate
+            Resource: "*"
+          - Sid: InspectorAccess
+            Effect: Allow
+            Action:
+              - inspector2:ListFindings
+            Resource: "*"
+          - Sid: SSMAccess
+            Effect: Allow
+            Action:
+              - ssm:DescribeInstanceInformation
+              - ssm:GetInventory
+            Resource: "*"
+          - Sid: SupportAccess
+            Effect: Allow
+            Action:
+              - support:DescribeTrustedAdvisorChecks
+              - support:DescribeTrustedAdvisorCheckResult
+            Resource: "*"
+          - Sid: ApplicationSignalsAccess
+            Effect: Allow
+            Action:
+              - application-signals:ListServices
+            Resource: "*"
+          - Sid: ResilienceHubAccess
+            Effect: Allow
+            Action:
+              - resiliencehub:ListApps
+              - resiliencehub:DescribeApp
+              - resiliencehub:DescribeResiliencyPolicy
+              - resiliencehub:ListTestRecommendations
+              - resiliencehub:DescribeAppVersionResourcesResolutionStatus
+            Resource: "*"
+          - Sid: HealthAccess
+            Effect: Allow
+            Action:
+              - health:DescribeEvents
+              - health:DescribeEventDetails
+              - health:DescribeAffectedEntities
+            Resource: "*"
+          - Sid: MarketplaceAccess
+            Effect: Allow
+            Action:
+              - aws-marketplace:GetEntitlements
+            Resource: "*"
+          - Sid: EC2Access
+            Effect: Allow
+            Action:
+              - ec2:DescribeRegions
+            Resource: "*"
+          - Sid: LogsAccess
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: 
+              - !Sub "arn:aws:logs:${Region}:${AWS::AccountId}:log-group:/aws/lambda/agency360-sender*"
+          - Sid: SQSAccess
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt Agency360DLQ.Arn
+
+  Agency360LambdaSenderRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      # Removed RoleName to allow CloudFormation to generate a name
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Ref Agency360SenderPolicy
+
+  LambdaKMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: KMS key for Lambda environment variables
+      EnableKeyRotation: true
+      KeyPolicy:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: '*'
+
+  LambdaKMSKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: alias/agency360-lambda-env
+      TargetKeyId: !Ref LambdaKMSKey
+
+  Agency360SenderFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      # Removed FunctionName to allow CloudFormation to generate a name
+      Handler: index.lambda_handler
+      Role: !GetAtt Agency360LambdaSenderRole.Arn
+      ReservedConcurrentExecutions: 10
+      DeadLetterConfig:
+        TargetArn: !GetAtt Agency360DLQ.Arn
+      KmsKeyArn: !GetAtt LambdaKMSKey.Arn
+      Environment:
+        Variables:
+          REGION: !Ref Region
+          BUCKET: !Ref S3Bucket
+          ANALYTICS_KMS_KEY: !Ref AnalyticsKMSKey
+
+      Code:
+        ZipFile: |
+          import boto3
+          import tempfile
+          import importlib.util
+          import sys
+          import os
+          from typing import Any, Dict
+
+          BUCKET = os.environ.get("BUCKET")
+
+          def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+              bucket_name = BUCKET
+              script_key = 'scripts/sender.py' #Uncomment this line to trigger the sender.py
+              
+              s3_client = boto3.client('s3')
+              response = s3_client.get_object(Bucket=bucket_name, Key=script_key)
+              script_content = response['Body'].read().decode('utf-8')
+              
+              # Write to temporary file and import securely
+              with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+                  temp_file.write(script_content)
+                  temp_file.flush()
+                  temp_file_path = temp_file.name
+              
+              try:
+                  spec = importlib.util.spec_from_file_location("dynamic_module", temp_file_path)
+                  module = importlib.util.module_from_spec(spec)
+                  sys.modules[spec.name] = module
+                  spec.loader.exec_module(module)
+                  
+                  result = module.lambda_handler(event, context)
+                  return result
+              finally:
+                  os.unlink(temp_file_path)
+      Runtime: python3.13
+      Timeout: 900
+      MemorySize: 10240
+
+  LambdaScheduleRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Trigger Lambda function every morning at 01:00 AM
+      ScheduleExpression: cron(0 1 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt Agency360SenderFunction.Arn
+          Id: Agency360SenderTarget
+
+  LambdaInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref Agency360SenderFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LambdaScheduleRule.Arn
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt Agency360SenderFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaArn"
+  
+  LambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt Agency360LambdaSenderRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RoleArn"
+  
+  PolicyArn:
+    Description: ARN of the custom policy
+    Value: !Ref Agency360SenderPolicy
+    Export:
+      Name: !Sub "${AWS::StackName}-PolicyArn"
