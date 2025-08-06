@@ -1,4 +1,4 @@
-# AWS Multi-Account Observability Platform
+# AWS Multi-Account Observability & Analytics
 [![AWS](https://img.shields.io/badge/AWS-Lambda-orange.svg)](https://aws.amazon.com/lambda/)
 [![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://python.org)
 [![CloudFormation](https://img.shields.io/badge/CloudFormation-Template-green.svg)](https://aws.amazon.com/cloudformation/)
