@@ -32,7 +32,7 @@ A comprehensive AWS multi-account analytics platform that aggregates, processes,
 - **core-schema.sql** → Database schema for Aurora PostgreSQL
 - **core-view-schema.sql** → Analytics views for QuickSight integration
 
-### Sender Accounts (Data Collection) (https://github.com/ruvigh/agency-360-sender/)
+### Sender Accounts (Data Collection) 
 - **Agency360-Sender.yml** → CloudFormation template for sender infrastructure
 - **sender.py** → Data collection script (stored in S3, executed by Lambda)
 
