@@ -332,8 +332,12 @@ Resources:
             Action:
               - s3:GetObject
               - s3:DeleteObject
+              - s3:PutObject
+              - s3:GetObjectTagging
+              - s3:PutObjectTagging
             Resource:
               - !Sub "${S3Bucket.Arn}/data/*"
+              - !Sub "${S3Bucket.Arn}/loaded/*"
           - Sid: S3ListAccess
             Effect: Allow
             Action:
@@ -341,7 +345,9 @@ Resources:
             Resource: !GetAtt S3Bucket.Arn
             Condition:
               StringLike:
-                s3:prefix: "data/*"
+                s3:prefix:
+                  - "data/*"
+                  - "loaded/*"
           - Sid: RDSAccess
             Effect: Allow
             Action:
@@ -361,6 +367,7 @@ Resources:
             Action:
               - kms:Decrypt
               - kms:DescribeKey
+              - kms:GenerateDataKey
             Resource: !GetAtt Agency360KMSKey.Arn
           - Sid: AccountAccess
             Effect: Allow
