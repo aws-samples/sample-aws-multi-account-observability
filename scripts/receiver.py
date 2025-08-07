@@ -247,7 +247,7 @@ class S3Manager:
             return True
             
         except Exception as e:
-            print(f"{ERROR} Failed to move {file_path}: {e}")
+            #print(f"{ERROR} Failed to move {file_path}: {e}")
             return False
 
     def delete_files(self, file_path) -> bool:
