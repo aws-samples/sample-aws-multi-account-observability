@@ -5,7 +5,8 @@
 [![Boto3](https://img.shields.io/badge/Boto3-1.38.0-yellow.svg)](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-A comprehensive AWS multi-account observability platform that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and designed for enterprise-scale monitoring.
+## What is AWS Multi-Account Observability & Analytics?
+A comprehensive AWS multi-account observability view that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and designed for enterprise-scale monitoring.
 
 ## Architecture
 
