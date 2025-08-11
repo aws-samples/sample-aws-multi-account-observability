@@ -1,4 +1,5 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
+
 """ from dotenv import load_dotenv, dotenv_values
 load_dotenv() """
 
@@ -696,7 +697,9 @@ class AWSResourceManager:
                     'platform': instance.get('PlatformName'),
                     'platform_version': instance.get('PlatformVersion'),
                     'agent_version': instance.get('AgentVersion'),
-                    'last_ping': instance.get('LastPingDateTime')
+                    'last_ping': instance.get('LastPingDateTime'),
+                    'computer_name': instance.get('ComputerName'),
+                    'instance_type': instance.get('InstanceType')
                 })
                 
                 # Get security-relevant inventory types (only supported ones)
@@ -1056,12 +1059,15 @@ class AWSResourceManager:
     def get_waf_security(self):
         """Get comprehensive WAF security rules and configurations"""
         try:
-            waf = boto3.client('wafv2', region_name=REGION)
             waf_data = []
-            
-            # Only check REGIONAL scope in current region
-            for scope in ['REGIONAL']:
+             
+            # Check all scopes: REGIONAL, CLOUDFRONT, and GLOBAL
+            for scope in ['REGIONAL', 'CLOUDFRONT']:
                 try:
+                    # Use us-east-1 for CLOUDFRONT scope, current region for others
+                    region = 'us-east-1' if scope == 'CLOUDFRONT' else REGION
+                    waf = boto3.client('wafv2', region_name=region)
+                    
                     web_acls = AWSResponse(waf.list_web_acls(Scope=scope))
                     for acl in web_acls.data.get('WebACLs', []):
                         acl_details = AWSResponse(waf.get_web_acl(Name=acl.get('Name'), Scope=scope, Id=acl.get('Id')))
@@ -1125,11 +1131,7 @@ class AWSResourceManager:
         
         try:
             # Check both REGIONAL and CLOUDFRONT scopes
-            scopes_to_check = ['REGIONAL']
-            
-            # Add CLOUDFRONT scope if in us-east-1 or check globally
-            if REGION == 'us-east-1':
-                scopes_to_check.append('CLOUDFRONT')
+            scopes_to_check = ['REGIONAL', 'CLOUDFRONT']
             
             for scope in scopes_to_check:
                 try:
