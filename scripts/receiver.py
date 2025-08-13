@@ -231,7 +231,8 @@ class S3Manager:
     def move_to_processed(self, file_path) -> bool:
         try:
             # Replace 'data' with 'processed' in the path
-            new_path = file_path.replace('data/', 'loaded/', 1)
+            temp_path = file_path
+            new_path = temp_path.replace('data/', 'loaded/', 1)
             
             # Copy object to new location
             self.s3.copy_object(
@@ -1283,6 +1284,11 @@ def lambda_handler(event=None, context=None):
     if aws_permission.test():
         print("*"*15,"Connected","*"*15)
         data    = load_data()
+
+        if not data:
+            print(f"{INFO} No files to load")
+            return True
+        
         status  = process_data_status(data)
 
         #testing()

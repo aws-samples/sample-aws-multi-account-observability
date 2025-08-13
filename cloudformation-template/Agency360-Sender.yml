@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Agency360 - Sender Account with Lambda function that hthat extracts relevant data from this account and sends it to the Analytics account for metric aggregation. Eventbridge configured to run every day at 0100
+Description: A360 - Sender Account with Lambda function that hthat extracts relevant data from this account and sends it to the Analytics account for metric aggregation. Eventbridge configured to run every day at 0100
 
 Parameters:
   Region:
@@ -14,7 +14,7 @@ Parameters:
     
   S3Bucket:
     Type: String
-    Default: 'agency360-data-bucket'
+    Default: 'A360-data-bucket'
     Description: S3 bucket for storing data
     
   AnalyticsKMSKey:
@@ -23,17 +23,17 @@ Parameters:
     Description: Analytics account KMS key ARN for S3 encryption
 
 Resources:
-  Agency360DLQ:
+  A360DLQ:
     Type: 'AWS::SQS::Queue'
     Properties:
       # Removed QueueName to allow CloudFormation to generate a name
       KmsMasterKeyId: alias/aws/sqs
 
-  Agency360SenderPolicy:
+  A360SenderPolicy:
     Type: 'AWS::IAM::ManagedPolicy'
     Properties:
       # Removed ManagedPolicyName to allow CloudFormation to generate a name
-      Description: Policy for Agency360 Sender Lambda function
+      Description: Policy for A360 Sender Lambda function
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -226,14 +226,14 @@ Resources:
               - logs:CreateLogStream
               - logs:PutLogEvents
             Resource: 
-              - !Sub "arn:aws:logs:${Region}:${AWS::AccountId}:log-group:/aws/lambda/agency360-sender*"
+              - !Sub "arn:aws:logs:${Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
           - Sid: SQSAccess
             Effect: Allow
             Action:
               - sqs:SendMessage
-            Resource: !GetAtt Agency360DLQ.Arn
+            Resource: !GetAtt A360DLQ.Arn
 
-  Agency360LambdaSenderRole:
+  A360LambdaSenderRole:
     Type: 'AWS::IAM::Role'
     Properties:
       # Removed RoleName to allow CloudFormation to generate a name
@@ -246,7 +246,7 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - !Ref Agency360SenderPolicy
+        - !Ref A360SenderPolicy
 
   LambdaKMSKey:
     Type: 'AWS::KMS::Key'
@@ -271,18 +271,18 @@ Resources:
   LambdaKMSKeyAlias:
     Type: 'AWS::KMS::Alias'
     Properties:
-      AliasName: alias/agency360-lambda-env
+      AliasName: alias/A360-lambda-env
       TargetKeyId: !Ref LambdaKMSKey
 
-  Agency360SenderFunction:
+  A360SenderFunction:
     Type: 'AWS::Lambda::Function'
     Properties:
       # Removed FunctionName to allow CloudFormation to generate a name
       Handler: index.lambda_handler
-      Role: !GetAtt Agency360LambdaSenderRole.Arn
+      Role: !GetAtt A360LambdaSenderRole.Arn
       ReservedConcurrentExecutions: 10
       DeadLetterConfig:
-        TargetArn: !GetAtt Agency360DLQ.Arn
+        TargetArn: !GetAtt A360DLQ.Arn
       KmsKeyArn: !GetAtt LambdaKMSKey.Arn
       Environment:
         Variables:
@@ -336,13 +336,13 @@ Resources:
       ScheduleExpression: cron(0 1 * * ? *)
       State: ENABLED
       Targets:
-        - Arn: !GetAtt Agency360SenderFunction.Arn
-          Id: Agency360SenderTarget
+        - Arn: !GetAtt A360SenderFunction.Arn
+          Id: A360SenderTarget
 
   LambdaInvokePermission:
     Type: 'AWS::Lambda::Permission'
     Properties:
-      FunctionName: !Ref Agency360SenderFunction
+      FunctionName: !Ref A360SenderFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt LambdaScheduleRule.Arn
@@ -350,18 +350,18 @@ Resources:
 Outputs:
   LambdaFunctionArn:
     Description: ARN of the Lambda function
-    Value: !GetAtt Agency360SenderFunction.Arn
+    Value: !GetAtt A360SenderFunction.Arn
     Export:
       Name: !Sub "${AWS::StackName}-LambdaArn"
   
   LambdaRoleArn:
     Description: ARN of the Lambda execution role
-    Value: !GetAtt Agency360LambdaSenderRole.Arn
+    Value: !GetAtt A360LambdaSenderRole.Arn
     Export:
       Name: !Sub "${AWS::StackName}-RoleArn"
   
   PolicyArn:
     Description: ARN of the custom policy
-    Value: !Ref Agency360SenderPolicy
+    Value: !Ref A360SenderPolicy
     Export:
       Name: !Sub "${AWS::StackName}-PolicyArn"

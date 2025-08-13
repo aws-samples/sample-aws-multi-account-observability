@@ -1,8 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
-
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv() """
-
+load_dotenv()
+ """
 """ IMPORTS """
 import sys
 import boto3
@@ -1567,7 +1566,7 @@ class AWSResourceManager:
                 if (creation_time and start_date_aware <= creation_time <= end_date_aware) or \
                    (last_assessment_time and start_date_aware <= last_assessment_time <= end_date_aware):
                     
-                    app_arn = app.get('appArn')
+                    app_arn = app.get('assessmentArn') #earlier was appArn
                     app_data = {
                         'app_arn': app_arn,
                         'name': app.get('name'),

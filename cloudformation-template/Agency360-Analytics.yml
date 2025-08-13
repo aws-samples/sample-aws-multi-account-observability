@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Agency 360 - Analytics Account, S3 Bucket, KMS, Lambda and VPC with Aurora PostgreSQL RDS and Security Groups for QuickSight
+Description: A360 - Analytics Account, S3 Bucket, KMS, Lambda and VPC with Aurora PostgreSQL RDS and Security Groups for QuickSight
 
 Parameters:
   S3BucketName:
     Type: String
     Description: Name of the S3 bucket to create
-    Default: agency360-data-bucket
+    Default: A360-data-bucket
 
   SenderAccounts:
     Type: CommaDelimitedList
@@ -14,10 +14,10 @@ Parameters:
 
 Resources:
   # KMS Key for encryption
-  Agency360KMSKey:
+  A360KMSKey:
     Type: AWS::KMS::Key
     Properties:
-      Description: KMS key for Agency360 encryption
+      Description: KMS key for A360 encryption
       EnableKeyRotation: true
       KeyPolicy:
         Statement:
@@ -46,11 +46,11 @@ Resources:
               - "kms:DescribeKey"
             Resource: "*"
 
-  Agency360KMSKeyAlias:
+  A360KMSKeyAlias:
     Type: AWS::KMS::Alias
     Properties:
-      AliasName: alias/agency360-key
-      TargetKeyId: !Ref Agency360KMSKey
+      AliasName: alias/A360-key
+      TargetKeyId: !Ref A360KMSKey
 
   # VPC Configuration
   VPC:
@@ -61,7 +61,7 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: Agency360-VPC
+          Value: A360-VPC
           
   # VPC Flow Logs
   VPCFlowLog:
@@ -107,7 +107,7 @@ Resources:
       AvailabilityZone: !Select [0, !GetAZs '']
       Tags:
         - Key: Name
-          Value: Agency360-Private-Subnet-1
+          Value: A360-Private-Subnet-1
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -117,7 +117,7 @@ Resources:
       AvailabilityZone: !Select [1, !GetAZs '']
       Tags:
         - Key: Name
-          Value: Agency360-Private-Subnet-2
+          Value: A360-Private-Subnet-2
 
   PrivateSubnet3:
     Type: AWS::EC2::Subnet
@@ -127,7 +127,7 @@ Resources:
       AvailabilityZone: !Select [2, !GetAZs '']
       Tags:
         - Key: Name
-          Value: Agency360-Private-Subnet-3
+          Value: A360-Private-Subnet-3
 
   # Security Groups with descriptions
   RDSSecurityGroup:
@@ -159,7 +159,7 @@ Resources:
           Description: Allow PostgreSQL outbound traffic
       Tags:
         - Key: Name
-          Value: Agency360-RDS-SG
+          Value: A360-RDS-SG
 
   QuickSightSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -180,7 +180,7 @@ Resources:
           Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: Agency360-QuickSight-SG
+          Value: A360-QuickSight-SG
 
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -200,7 +200,7 @@ Resources:
           Description: Allow PostgreSQL access to RDS
       Tags:
         - Key: Name
-          Value: Agency360-Lambda-SG
+          Value: A360-Lambda-SG
 
   # Route Table for Private Subnets
   PrivateRouteTable:
@@ -209,7 +209,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: Agency360-Private-RouteTable
+          Value: A360-Private-RouteTable
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -257,7 +257,7 @@ Resources:
         - !Ref PrivateSubnet3
       Tags:
         - Key: Name
-          Value: Agency360-DB-SubnetGroup
+          Value: A360-DB-SubnetGroup
 
   # Enhanced monitoring role for RDS
   RDSEnhancedMonitoringRole:
@@ -287,7 +287,7 @@ Resources:
       EnableHttpEndpoint: true
       EnableIAMDatabaseAuthentication: true
       StorageEncrypted: true
-      KmsKeyId: !Ref Agency360KMSKey
+      KmsKeyId: !Ref A360KMSKey
       ServerlessV2ScalingConfiguration:
         MinCapacity: 0.5
         MaxCapacity: 16
@@ -313,11 +313,11 @@ Resources:
           Value: !Sub "${AWS::StackName}-coredb-instance"
 
   # IAM Managed Policies with constrained permissions
-  Agency360ReceiverPolicy:
+  A360ReceiverPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       # Removed ManagedPolicyName to allow CloudFormation to generate a name
-      Description: Policy for Agency360 Receiver Lambda function
+      Description: Policy for A360 Receiver Lambda function
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -368,7 +368,7 @@ Resources:
               - kms:Decrypt
               - kms:DescribeKey
               - kms:GenerateDataKey
-            Resource: !GetAtt Agency360KMSKey.Arn
+            Resource: !GetAtt A360KMSKey.Arn
           - Sid: AccountAccess
             Effect: Allow
             Action:
@@ -380,17 +380,17 @@ Resources:
               - logs:CreateLogGroup
               - logs:CreateLogStream
               - logs:PutLogEvents
-            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/agency360-receiver*"
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-receiver*"
           - Sid: SQSAccess
             Effect: Allow
             Action:
               - sqs:SendMessage
             Resource: !GetAtt LambdaDLQ.Arn
 
-  Agency360SenderPolicy:
+  A360SenderPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      Description: Policy for Agency360 Sender Lambda function
+      Description: Policy for A360 Sender Lambda function
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -497,7 +497,7 @@ Resources:
               - kms:GenerateDataKey
               - kms:GenerateDataKeyWithoutPlaintext
               - kms:ReEncrypt*
-            Resource: !GetAtt Agency360KMSKey.Arn
+            Resource: !GetAtt A360KMSKey.Arn
           - Sid: WAFAccess
             Effect: Allow
             Action:
@@ -584,7 +584,7 @@ Resources:
               - logs:CreateLogGroup
               - logs:CreateLogStream
               - logs:PutLogEvents
-            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/agency360-sender*"
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
           - Sid: SQSAccess
             Effect: Allow
             Action:
@@ -592,7 +592,7 @@ Resources:
             Resource: !GetAtt LambdaDLQ.Arn
 
   # Lambda Execution Roles
-  Agency360LambdaReceiverRole:
+  A360LambdaReceiverRole:
     Type: AWS::IAM::Role
     Properties:
       # Removed RoleName to allow CloudFormation to generate a name
@@ -605,9 +605,9 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - !Ref Agency360ReceiverPolicy
+        - !Ref A360ReceiverPolicy
 
-  Agency360LambdaSenderRole:
+  A360LambdaSenderRole:
     Type: AWS::IAM::Role
     Properties:
       # Removed RoleName to allow CloudFormation to generate a name
@@ -620,14 +620,14 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - !Ref Agency360SenderPolicy
+        - !Ref A360SenderPolicy
 
   # Dead Letter Queue for Lambda functions
   LambdaDLQ:
     Type: AWS::SQS::Queue
     Properties:
       # Removed QueueName to allow CloudFormation to generate a name
-      KmsMasterKeyId: !Ref Agency360KMSKey
+      KmsMasterKeyId: !Ref A360KMSKey
       MessageRetentionPeriod: 1209600  # 14 days
 
   # S3 Access Logs Bucket
@@ -639,7 +639,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !Ref Agency360KMSKey
+              KMSMasterKeyID: !Ref A360KMSKey
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -655,7 +655,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !Ref Agency360KMSKey
+              KMSMasterKeyID: !Ref A360KMSKey
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:
@@ -674,19 +674,19 @@ Resources:
   ReceiverLambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref Agency360ReceiverFunction
+      FunctionName: !Ref A360ReceiverFunction
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
       SourceArn: !GetAtt S3Bucket.Arn
 
   # Lambda Functions with VPC and DLQ configuration
-  Agency360ReceiverFunction:
+  A360ReceiverFunction:
     Type: AWS::Lambda::Function
     Properties:
       # Removed FunctionName to allow CloudFormation to generate a name
       Runtime: python3.13
       Handler: index.lambda_handler
-      Role: !GetAtt Agency360LambdaReceiverRole.Arn
+      Role: !GetAtt A360LambdaReceiverRole.Arn
       Timeout: 900
       MemorySize: 10240
       ReservedConcurrentExecutions: 10
@@ -700,8 +700,8 @@ Resources:
           DB_NAME: core
           AURORA_CLUSTER_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
           AURORA_SECRET_ARN: !GetAtt AuroraDBCluster.MasterUserSecret.SecretArn
-          ANALYTICS_KMS_KEY: !GetAtt Agency360KMSKey.Arn
-      KmsKeyArn: !GetAtt Agency360KMSKey.Arn
+          ANALYTICS_KMS_KEY: !GetAtt A360KMSKey.Arn
+      KmsKeyArn: !GetAtt A360KMSKey.Arn
       Code:
         ZipFile: |
           import boto3
@@ -738,13 +738,13 @@ Resources:
               finally:
                   os.unlink(temp_file_path)
 
-  Agency360SenderFunction:
+  A360SenderFunction:
     Type: AWS::Lambda::Function
     Properties:
       # Removed FunctionName to allow CloudFormation to generate a name
       Runtime: python3.13
       Handler: index.lambda_handler
-      Role: !GetAtt Agency360LambdaSenderRole.Arn
+      Role: !GetAtt A360LambdaSenderRole.Arn
       Timeout: 900
       MemorySize: 10240
       ReservedConcurrentExecutions: 10
@@ -755,8 +755,8 @@ Resources:
         Variables:
           REGION: !Ref AWS::Region
           BUCKET: !Ref S3Bucket
-          ANALYTICS_KMS_KEY: !GetAtt Agency360KMSKey.Arn
-      KmsKeyArn: !GetAtt Agency360KMSKey.Arn
+          ANALYTICS_KMS_KEY: !GetAtt A360KMSKey.Arn
+      KmsKeyArn: !GetAtt A360KMSKey.Arn
       Code:
         ZipFile: |
           import boto3
@@ -799,23 +799,23 @@ Resources:
     Type: AWS::Events::Rule
     Properties:
       # Removed Name to allow CloudFormation to generate a name
-      Description: Trigger Agency360 Sender Lambda daily at 2 AM
+      Description: Trigger A360 Sender Lambda daily at 2 AM
       ScheduleExpression: cron(0 2 * * ? *)
       State: ENABLED
       Targets:
-        - Arn: !GetAtt Agency360SenderFunction.Arn
-          Id: Agency360SenderTarget
-    DependsOn: Agency360SenderFunction
+        - Arn: !GetAtt A360SenderFunction.Arn
+          Id: A360SenderTarget
+    DependsOn: A360SenderFunction
 
   # Permission for EventBridge to invoke Sender Lambda
   SenderLambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref Agency360SenderFunction
+      FunctionName: !Ref A360SenderFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt SenderScheduleRule.Arn
-    DependsOn: Agency360SenderFunction
+    DependsOn: A360SenderFunction
 
   # S3 Bucket Policy with constrained access
   S3BucketPolicy:
@@ -927,7 +927,7 @@ Outputs:
 
   KMSKeyArn:
     Description: KMS Key ARN for encryption
-    Value: !GetAtt Agency360KMSKey.Arn
+    Value: !GetAtt A360KMSKey.Arn
 
   DLQArn:
     Description: Dead Letter Queue ARN
@@ -935,11 +935,11 @@ Outputs:
 
   ReceiverLambdaFunctionArn:
     Description: Receiver Lambda Function ARN
-    Value: !GetAtt Agency360ReceiverFunction.Arn
+    Value: !GetAtt A360ReceiverFunction.Arn
 
   SenderLambdaFunctionArn:
     Description: Sender Lambda Function ARN
-    Value: !GetAtt Agency360SenderFunction.Arn
+    Value: !GetAtt A360SenderFunction.Arn
 
   S3BucketName:
     Description: S3 Bucket Name
