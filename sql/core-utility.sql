@@ -90,3 +90,30 @@ AND (
   (p.name = 'Cloud Infrastructure Platform' AND a.account_id IN ('123456789012', '234567890123')) OR
   (p.name = 'Data Analytics Suite' AND a.account_id IN ('345678901234', '456789012345')) 
 );
+
+-- Update the logs_messages
+-- Run one by one
+-- 1. Drop views that use log_messages
+DROP VIEW IF EXISTS view_acct_log_messages;
+
+-- 2. Alter the column
+ALTER TABLE log_messages ALTER COLUMN message_type TYPE TEXT;
+
+-- 3. Recreate the views (run your view creation script)
+CREATE OR REPLACE VIEW view_acct_log_messages AS
+SELECT
+    lm.*,
+    a.account_id as account,
+    a.account_name,
+    CONCAT (a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    log_messages lm
+    JOIN logs l ON lm.log_id = l.id
+    JOIN accounts a ON l.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
