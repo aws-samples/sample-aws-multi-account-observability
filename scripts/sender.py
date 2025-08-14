@@ -1981,7 +1981,7 @@ def lambda_handler(event=None, context=None):
 
     if aws_permission.test():
         print("*"*15,"Connected","*"*15)
-        if (event is not None and isinstance(event, dict) and "history" in event and event['history'] == True and event['history'] == "True"):
+        if (event is not None and isinstance(event, dict) and "history" in event and (event['history'] == True or event['history'] == "True")):
             print("Loading Historical Data")
             history_start = time.time()
             history_data = load_historical_data()
