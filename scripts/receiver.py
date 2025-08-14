@@ -583,6 +583,10 @@ class CoreManager:
                 config_report_id = config_map['config_report_id']
                 
                 for resource in non_compliant:
+                    resource.pop('annotation', None)
+                    resource.pop('config_rule_invoked_time', None)
+                    resource['created_at'] = resource.pop('error_date', None)
+
                     resource['config_report_id'] = config_report_id
                     self.db.upsert('non_compliant_resources', resource, ['config_report_id', 'resource_id'], self.stats)
 
@@ -1262,7 +1266,7 @@ def load_data():
 def testing():
     core_db = CoreManager()
     try:
-        with open('data/2025-07-17_MONTHLY.json', 'r', encoding='utf-8') as f:
+        with open('data/2025-08-14_DAILY.json', 'r', encoding='utf-8') as f:
             file_content = f.read()
         print(f"*File Read")    
         data = json.loads(file_content)
