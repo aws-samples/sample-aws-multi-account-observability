@@ -211,7 +211,7 @@ CREATE TABLE log_messages (
     id SERIAL PRIMARY KEY,
     log_id INTEGER NOT NULL REFERENCES logs(id) ON DELETE CASCADE,
     message TEXT NOT NULL,
-    message_type VARCHAR(50),
+    message_type TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
