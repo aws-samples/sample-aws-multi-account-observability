@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv()
- """
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -552,13 +552,13 @@ class AWSResourceManager:
                     ))
                     for result in compliance.data.get('EvaluationResults', []):
                         result_time = result.get('ResultRecordedTime')
-                        if result_time and self.start_date <= result_time <= self.end_date:
+                        start_date_aware, end_date_aware = self._get_timezone_aware_dates()
+                        if result_time and start_date_aware <= result_time <= end_date_aware:
                             qualifier = result.get('EvaluationResultIdentifier', {}).get('EvaluationResultQualifier', {})
                             non_compliant_rules.append({
                                 'rule_name'                 : rule_name,
                                 'resource_id'               : qualifier.get('ResourceId'),
                                 'resource_type'             : qualifier.get('ResourceType'),
-                                'annotation'                : result.get('Annotation'),
                                 'error_date'                : result_time.isoformat() if result_time else None,
                                 'config_rule_invoked_time'  : result.get('ConfigRuleInvokedTime').isoformat() if result.get('ConfigRuleInvokedTime') else None
                             })
@@ -1981,7 +1981,7 @@ def lambda_handler(event=None, context=None):
 
     if aws_permission.test():
         print("*"*15,"Connected","*"*15)
-        if (event is not None and isinstance(event, dict) and "history" in event and event['history'] == True):
+        if (event is not None and isinstance(event, dict) and "history" in event and event['history'] == True and event['history'] == "True"):
             print("Loading Historical Data")
             history_start = time.time()
             history_data = load_historical_data()
