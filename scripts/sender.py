@@ -19,11 +19,10 @@ from datetime import datetime, timedelta, timezone
 from calendar import monthrange
 from enum import Enum
 
-""" GLOABAL VARIABLES """
-REGION = os.environ.get("REGION", "ap-southeast-1")
-BUCKET = os.environ.get("BUCKET")
-KMS_KEY_ID = os.environ.get("ANALYTICS_KMS_KEY")
-
+""" GLOBAL VARIABLES """
+REGION      = os.environ.get("REGION", "ap-southeast-1")
+BUCKET      = os.environ.get("BUCKET")
+KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
 
 SUCCESS     = "🟢"  
 FAIL        = "🟡"  
@@ -403,7 +402,7 @@ class AWSResourceManager:
 
     # Update Logs
     def set_log(self, def_type:AWSResourceType, status="Pass", value=None):
-        attr = def_type+"_status"
+        attr = def_type.value + "_status"  
         self.log[attr] = status    
         # Ensure message is a list
         if not isinstance(self.log['message'], list):
@@ -670,6 +669,33 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.COST, status="Fail", value={'cost_analysis': str(e)})
             return None
 
+    def get_patch_details(self, instance_id):
+        """Get detailed patch information using Patch Manager API"""
+        try:
+            ssm = boto3.client('ssm', region_name=REGION)
+            patches = []
+            
+            # Get individual patches for this instance directly
+            patch_response = AWSResponse(ssm.describe_instance_patches(
+                InstanceId=instance_id
+            ))
+            
+            for patch in patch_response.data.get('Patches', []):
+                patches.append({
+                    'instance_id': instance_id,
+                    'title': patch.get('Title'),
+                    'classification': patch.get('Classification'),
+                    'severity': patch.get('Severity'),
+                    'state': patch.get('State'),
+                    'installed_time': patch.get('InstalledTime')
+                })
+            
+            return patches
+        except Exception as e:
+            print(f"Error getting patch details for {instance_id}: {str(e)}")
+            return []
+
+
     #5. Fetching Inventory Data from Systems Manager
     def get_inventory(self):
         try:
@@ -722,12 +748,9 @@ class AWSResourceManager:
                                             'publisher': item.get('Publisher')
                                         })
                                     elif inv_type == 'AWS:PatchSummary':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'installed_count': item.get('InstalledCount'),
-                                            'missing_count': item.get('MissingCount'),
-                                            'failed_count': item.get('FailedCount')
-                                        })
+                                        detailed_patches = self.get_patch_details(instance_id)
+                                        security_inventory['patches'].extend(detailed_patches)
+
                                     elif inv_type == 'AWS:Service':
                                         security_inventory[key].append({
                                             'instance_id': instance_id,
@@ -776,7 +799,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.INVENTORY, status="Fail", value={'inventory': str(e)})
             return None
 
-    #6. Fetching Security data across Security hub, Guard Duty, IAM, KMS, WAF, Inspector, Trusted Advisor
+    #6.Fetching Security data across Security hub, Guard Duty, IAM, KMS, WAF, Inspector, Trusted Advisor
     def get_security(self):
         try:
             result = {
@@ -789,7 +812,8 @@ class AWSResourceManager:
                 'cloudtrail'            : [],
                 'secrets_manager'       : [],
                 'certificate_manager'   : [],
-                'trusted_advisor'       : []
+                'trusted_advisor'       : [],
+                'inspector'             : []
             }
             
             # 1. Security Hub (existing)
@@ -834,6 +858,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'security_all': str(e)})
             return None
         
+    #Getting from Security hub
     def get_security_hub(self):
         try:
             if not self.get_date():
@@ -929,6 +954,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'security_hub': str(e)})
             return None
 
+    #Getting from Guard Duty
     def get_guard_duty_security(self):
         """Get GuardDuty threat findings within date range"""
         try:
@@ -978,6 +1004,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'guard_duty': str(e)})
             return []
 
+    #Getting IAM data
     def get_iam_security(self):
         """Get IAM security posture within date range"""
         try:
@@ -1016,6 +1043,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'iam': str(e)})
             return {}
 
+    #Getting Key Managment System data
     def get_kms_security(self):
         """Get KMS key security information within date range"""
         try:
@@ -1054,9 +1082,8 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'kms': str(e)})
             return []
 
-    #WAF Doesnt filter by date as dates are not recorded - Need to work on
+    #Getting Waf configuration
     def get_waf_security(self):
-        """Get comprehensive WAF security rules and configurations"""
         try:
             waf_data = []
              
@@ -1124,7 +1151,8 @@ class AWSResourceManager:
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'waf': str(e)})
             return []
-
+    
+    #Fetching data from Waf Rules
     def get_waf_rules(self):
         waf_rules = []
         
@@ -1247,6 +1275,7 @@ class AWSResourceManager:
         
         return statement_type in compliant_types
       
+    #3. Fetching data from Cloudtrail logs
     def get_cloudtrail_security(self):
         """Get CloudTrail security events within date range"""
         try:
@@ -1291,6 +1320,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'cloudtrail': str(e)})
             return []
 
+    #4. Fetching data from Secrets Manager
     def get_secrets_security(self):
         """Get Secrets Manager security information within date range"""
         try:
@@ -1329,6 +1359,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'secrets_manager': str(e)})
             return []
 
+    #5. Fetching data from Certificate Manager
     def get_certificate_security(self):
         """Get Certificate Manager security information within date range"""
         try:
@@ -1369,7 +1400,8 @@ class AWSResourceManager:
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'certificate_manager': str(e)})
             return []
-
+    
+    #6. Fetching data from Inspector
     def get_inspector(self):
         try:
             inspector = boto3.client('inspector2', region_name=REGION)
@@ -1566,7 +1598,7 @@ class AWSResourceManager:
                 if (creation_time and start_date_aware <= creation_time <= end_date_aware) or \
                    (last_assessment_time and start_date_aware <= last_assessment_time <= end_date_aware):
                     
-                    app_arn = app.get('assessmentArn') #earlier was appArn
+                    app_arn = app.get('appArn') #earlier was appArn
                     app_data = {
                         'app_arn': app_arn,
                         'name': app.get('name'),
