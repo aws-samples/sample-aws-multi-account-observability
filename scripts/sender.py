@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv() """
-
+load_dotenv()
+ """
 """ IMPORTS """
 import sys
 import boto3
@@ -1265,7 +1265,9 @@ class AWSResourceManager:
             'ManagedRuleGroupStatement', 
             'SqliMatchStatement',
             'XssMatchStatement',
-            'GeoMatchStatement'
+            'GeoMatchStatement',
+            'IPSetReferenceStatement',
+            'RuleGroupReferenceStatement'
         ]
         
         # Additional checks for managed rule groups
@@ -1692,7 +1694,7 @@ class AWSResourceManager:
     def get_marketplace(self):
         try:
             # Use only valid marketplace services
-            marketplace_entitlement = boto3.client('marketplace-entitlement', region_name='us-east-1')
+            marketplace_entitlement = boto3.client('marketplace-entitlement', region_name=REGION)
             ce_client = boto3.client('ce')  # Cost Explorer for marketplace costs
             
             marketplace_data = []
