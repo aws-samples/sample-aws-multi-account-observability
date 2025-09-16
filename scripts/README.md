@@ -46,7 +46,7 @@ This folder contains the core Python scripts for the AWS Multi-Account Observabi
 - Partner/Customer name support for multi-tenant environments
 
 ## receiver.py
-**Purpose**: Data processing script that runs in the analytics account to process and load data into Aurora PostgreSQL.
+**Purpose**: Data  processing script that runs in the analytics account to process and load data into Aurora PostgreSQL.
 
 **Key Functions**:
 - Monitors S3 for new JSON files from sender accounts
