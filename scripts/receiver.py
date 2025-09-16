@@ -8,7 +8,7 @@ import json
 import os
 from typing import List, Dict, Any, Optional, Union
 from botocore.exceptions import ClientError
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from functools import lru_cache
 from enum import Enum
@@ -189,18 +189,21 @@ class AWSLogType(str, Enum):
 
 """ 1a. ENUM for AWS Resources """
 class AWSResourceType(str, Enum):
-    ACCOUNT         = "Account"
-    CONFIG          = "Config"
-    SERVICE         = "Service"
-    COST            = "Cost"
-    SECURITY        = "Security"
-    INVENTORY       = "Inventory"
-    MARKETPLACE     = "Marketplace"
-    TRUSTED_ADVISOR = "Trusted_advisor"
-    HEALTH          = "Health"
-    APPLICATION     = "Application"
-    RESILIENCE_HUB  = "Resilience Hub"
-    LOGS            = "Logs"
+    ACCOUNT             = "Account"
+    CONFIG              = "Config"
+    SERVICE             = "Service"
+    COST                = "Cost"
+    SECURITY            = "Security"
+    INVENTORY           = "Inventory"
+    MARKETPLACE         = "Marketplace"
+    TRUSTED_ADVISOR     = "Trusted_advisor"
+    HEALTH              = "Health"
+    APPLICATION         = "Application"
+    RESILIENCE_HUB      = "Resilience Hub"
+    COMPUTE_OPTIMIZER   = "Compute Optimnizer"
+    SERVICE_RESOURCES   = "Service Resources"
+    CONFIG_INVENTORY    = "Config Inventory"
+    LOGS                = "Logs"
 
 """ 2. S3 MANAGER : Wrapper class to interact with the S3 Bucket """
 class S3Manager:
@@ -515,10 +518,14 @@ class CoreManager:
                 account_data = {}
                 for k, v in data.items():
                     if k not in ['contact_info', 'alternate_contacts']:
-                        account_data[k] = v if v is not None else self._get_default_account(k, data.get('account_id'))
+                        account_data[k]                 = v if v is not None else self._get_default_account(k, data.get('account_id'))
                         account_data["csp"]             = self._get_default_account("csp", "AWS")
                         account_data["account_type"]    = self._get_default_account("account_type", "PRODUCTION")
                 
+                # Handle partner_name and customer_name specifically
+                account_data["partner_name"] = data.get('partner_name', 'None')
+                account_data["customer_name"] = data.get('customer_name', 'None')
+
                 # Upsert account
                 result = self.db.upsert('accounts', account_data, 'account_id', self.stats)
                 
@@ -541,11 +548,11 @@ class CoreManager:
                 for contact_type, contact_data in alt_contacts.items():
                     if contact_data:
                         contact_record = {
-                            'account_id': data['account_id'],
-                            'contact_type': contact_type,
-                            'full_name': contact_data.get('name'),
-                            'title': contact_data.get('title'),
-                            'email': contact_data.get('email')
+                            'account_id'    : data['account_id'],
+                            'contact_type'  : contact_type,
+                            'full_name'     : contact_data.get('name'),
+                            'title'         : contact_data.get('title'),
+                            'email'         : contact_data.get('email')
                         }
                         self.db.upsert('alternate_contacts', contact_record, ['account_id', 'contact_type'], self.stats)
             
@@ -596,27 +603,6 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.CONFIG, msg=e)
             print(f"{ERROR} Config load error: {e}")
             
-            return False
-    #Method: UPSERT
-    def load_service_resources_data(self, data: Dict) -> bool:
-        """Load service resources data with blazing fast upsert"""
-        try:
-            if not self.curr_acct:
-                print(f"{ERROR} No account loaded")
-                return False
-            
-            if isinstance(data, list):
-                for service in data:
-                    service['account_id'] = self.curr_acct['id']
-                    self.db.upsert('service_resources', service, 'resource_id', self.stats)
-            else:
-                # Single service
-                data['account_id'] = self.curr_acct['id']
-                self.db.upsert('service_resources', data, 'resource_id', self.stats)
-            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SERVICE)
-            return True
-        except Exception as e:
-            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.SERVICE, msg=e)
             return False
     #Method: UPSERT
     def load_service_data(self, data: List[Dict]) -> bool:
@@ -1115,26 +1101,115 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.RESILIENCE_HUB, msg=e)
             return False
     #Method: UPSERT
+    def load_service_resources_data(self, data: List[Dict]) -> bool:
+        """Load service resources with blazing fast upsert"""
+        try:
+            # Define schema fields to filter JSON data
+            resource_fields = {
+                'account_id', 'service_name', 'resource_type', 'resource_id', 'resource_name',
+                'region', 'availability_zone', 'state', 'instance_type', 'vpc_id', 'engine',
+                'instance_class', 'multi_az', 'size_gb', 'volume_type', 'creation_date',
+                'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
+            }
+            
+            if isinstance(data, list):
+                for resource in data:
+                    # Filter to only schema fields
+                    filtered_resource = {k: v for k, v in resource.items() if k in resource_fields}
+                    filtered_resource['account_id'] = self.curr_acct['id']
+                    
+                    # Upsert using composite unique key (account_id + resource_id)
+                    self.db.upsert('service_resources', filtered_resource, ['account_id', 'resource_id'], self.stats)
+
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SERVICE_RESOURCES)
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.SERVICE_RESOURCES, msg=e)
+            return False
+    #Method: UPSERT
+    def load_compute_optimizer_data(self, data: List[Dict]) -> bool:
+        """Load compute optimizer recommendations with blazing fast upsert"""
+        try:
+            # Define schema fields to filter JSON data
+            optimizer_fields = {
+                'account_id', 'resource_type', 'resource_arn', 'resource_name', 'finding',
+                'current_instance_type', 'current_memory_size', 'current_volume_type', 'current_volume_size',
+                'recommended_instance_type', 'recommended_memory_size', 'recommended_volume_type', 'recommended_volume_size',
+                'savings_opportunity_percentage', 'estimated_monthly_savings_usd', 'performance_risk',
+                'cpu_utilization_max', 'memory_utilization_avg', 'migration_effort'
+            }
+            
+            if isinstance(data, list):
+                for recommendation in data:
+                    # Filter to only schema fields
+                    filtered_rec = {k: v for k, v in recommendation.items() if k in optimizer_fields}
+                    filtered_rec['account_id'] = self.curr_acct['id']
+                    
+                    # Upsert using unique key (resource_arn is unique for compute optimizer recommendations)
+                    self.db.upsert('compute_optimizer', filtered_rec, 'resource_arn', self.stats)
+
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COMPUTE_OPTIMIZER)
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.COMPUTE_OPTIMIZER, msg=e)
+            return False
+    #Method: UPSERT
+    def load_config_inventory_data(self, data: List[Dict]) -> bool:
+        """Load config inventory data with blazing fast upsert"""
+        try:
+            # Define schema fields to filter JSON data
+            inventory_fields = {
+                'account_id', 'resource_type', 'resource_subtype', 'resource_id', 'resource_name', 'region',
+                'availability_zone', 'state', 'instance_type', 'vpc_id', 'engine',
+                'instance_class', 'multi_az', 'size_gb', 'volume_type', 'creation_date',
+                'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
+            }
+
+            if isinstance(data, list):
+                for inventory in data:
+                    # Filter to only schema fields
+                    filtered_inventory = {k: v for k, v in inventory.items() if k in inventory_fields}
+                    filtered_inventory['account_id'] = self.curr_acct['id']
+
+                    # Upsert using composite unique key (account_id + resource_id)
+                    self.db.upsert('config_inventory', filtered_inventory, ['account_id', 'resource_id'], self.stats)
+
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.CONFIG_INVENTORY)
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.CONFIG_INVENTORY, msg=e)
+            return False
+
+
+    #Method: UPSERT
     def load_logs_data(self, data: Dict) -> bool:
-        """Load logs data with blazing fast upsert"""
         try:
             if not self.curr_acct:
                 print(f"{ERROR} No account loaded")
                 return False
             
+            # Handle messages - could be list or dict
             messages = data.pop('message', [])
+            if not isinstance(messages, list):
+                messages = [messages] if messages else []
             
-            # Filter out invalid columns - remove 'account' field if it exists
+            # Filter out invalid columns
             valid_log_fields = {
                 'account_id', 'date_created', 'account_status', 'cost_status', 
                 'service_status', 'security_status', 'config_status', 
                 'inventory_status', 'marketplace_status', 'trusted_advisor_status',
-                'health_status', 'application_status', 'resilience_hub_status'
+                'health_status', 'application_status', 'resilience_hub_status',
+                
             }
+            #'compute_optimizer_status', 'service_resources_status'
             
             # Filter data to only include valid fields
             filtered_data = {k: v for k, v in data.items() if k in valid_log_fields}
             filtered_data['account_id'] = self.curr_acct['id']
+            
+            # Ensure date_created exists
+            if 'date_created' not in filtered_data:
+                filtered_data['date_created'] = datetime.now(timezone.utc)
             
             result = self.db.upsert('logs', filtered_data, ['account_id', 'date_created'], self.stats)
             
@@ -1146,20 +1221,32 @@ class CoreManager:
                 )
                 
                 if db_log:
-                    for message_obj in messages:
-                        for message_type, message_text in message_obj.items():
+                    for message_item in messages:
+                        if isinstance(message_item, dict):
+                            # Handle dict format: {'type': 'message'}
+                            for message_type, message_text in message_item.items():
+                                message_data = {
+                                    'log_id': db_log['id'],
+                                    'message': str(message_text),
+                                    'message_type': message_type
+                                }
+                                self.db.upsert('log_messages', message_data, ['log_id', 'message_type'], self.stats)
+                        else:
+                            # Handle string format
                             message_data = {
                                 'log_id': db_log['id'],
-                                'message': message_text,
-                                'message_type': message_type
+                                'message': str(message_item),
+                                'message_type': 'INFO'
                             }
                             self.db.upsert('log_messages', message_data, ['log_id', 'message_type'], self.stats)
                 
-                self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.LOGS)
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.LOGS)
             return True
         except Exception as e:
-            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.LOGS, msg=e)
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.LOGS, msg=str(e))
+            print(f"{ERROR} Logs load error: {e}")
             return False
+
 
     def process_file_data(self, data: Dict, file_name: str) -> None:
         """Process and load all data from file"""
@@ -1171,19 +1258,21 @@ class CoreManager:
             return
 
         loaders = {
-            'account': self.load_account_data,
-            'config': self.load_config_data,
-            #'service_resources': self.load_service_resources_data, #for future use
-            'service': self.load_service_data,
-            'cost': self.load_cost_data,
-            'security': self.load_security_data,
-            'inventory': self.load_inventory_data,
-            'marketplace': self.load_marketplace_data,
-            'trusted_advisor': self.load_trusted_advisor_data,
-            'health': self.load_health_data,
-            'application': self.load_application_data,
-            'resilience_hub': self.load_resilience_hub_data,
-            'logs': self.load_logs_data
+            'account'           : self.load_account_data,
+            'config'            : self.load_config_data,
+            'service'           : self.load_service_data,
+            'cost'              : self.load_cost_data,
+            'security'          : self.load_security_data,
+            'inventory'         : self.load_inventory_data,
+            'marketplace'       : self.load_marketplace_data,
+            'trusted_advisor'   : self.load_trusted_advisor_data,
+            'health'            : self.load_health_data,
+            'application'       : self.load_application_data,
+            'resilience_hub'    : self.load_resilience_hub_data,
+            'service_resources' : self.load_service_resources_data,
+            'compute_optimizer' : self.load_compute_optimizer_data,
+            'config_inventory'  : self.load_config_inventory_data,
+            'logs'              : self.load_logs_data
         }
         
         for attr, loader in loaders.items():
@@ -1266,7 +1355,7 @@ def load_data():
 def testing():
     core_db = CoreManager()
     try:
-        with open('data/2025-08-14_DAILY.json', 'r', encoding='utf-8') as f:
+        with open('data/2025-09-15_DAILY.json', 'r', encoding='utf-8') as f:
             file_content = f.read()
         print(f"*File Read")    
         data = json.loads(file_content)

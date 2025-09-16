@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv()
- """
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -23,6 +23,8 @@ from enum import Enum
 REGION      = os.environ.get("REGION", "ap-southeast-1")
 BUCKET      = os.environ.get("BUCKET")
 KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
+CUSTOMER    = os.environ.get("CUSTOMER", None)
+PARTNER     = os.environ.get("PARTNER", None)
 
 SUCCESS     = "🟢"  
 FAIL        = "🟡"  
@@ -86,32 +88,39 @@ def upload_to_s3(account, data, interval, end_date):
 @dataclass
 class AWSResourceData:
     """Data structure for AWS resource information"""
-    account			: Dict[str, Any]        = field(default_factory=dict)
-    config			: List[Dict[str, Any]]  = field(default_factory=list)
-    service			: List[Dict[str, Any]]  = field(default_factory=list)
-    cost			: List[Dict[str, Any]]  = field(default_factory=list)
-    security		: List[Dict[str, Any]]  = field(default_factory=list)
-    inventory		: List[Dict[str, Any]]  = field(default_factory=list)
-    marketplace		: List[Dict[str, Any]]  = field(default_factory=list)
-    trusted_advisor	: List[Dict[str, Any]]  = field(default_factory=list)
-    health			: List[Dict[str, Any]]  = field(default_factory=list)
-    application		: List[Dict[str, Any]]  = field(default_factory=list)
-    resilience_hub	: List[Dict[str, Any]]  = field(default_factory=list)
-    logs			: Dict[str, Any] = field(default_factory=dict)
+    account			    : Dict[str, Any]        = field(default_factory=dict)
+    config			    : List[Dict[str, Any]]  = field(default_factory=list)
+    service			    : List[Dict[str, Any]]  = field(default_factory=list)
+    cost			    : List[Dict[str, Any]]  = field(default_factory=list)
+    security		    : List[Dict[str, Any]]  = field(default_factory=list)
+    inventory		    : List[Dict[str, Any]]  = field(default_factory=list)
+    marketplace		    : List[Dict[str, Any]]  = field(default_factory=list)
+    trusted_advisor	    : List[Dict[str, Any]]  = field(default_factory=list)
+    health			    : List[Dict[str, Any]]  = field(default_factory=list)
+    application		    : List[Dict[str, Any]]  = field(default_factory=list)
+    resilience_hub	    : List[Dict[str, Any]]  = field(default_factory=list)
+    compute_optimizer	: List[Dict[str, Any]]  = field(default_factory=list)
+    service_resources	: List[Dict[str, Any]]  = field(default_factory=list)
+    config_inventory	: List[Dict[str, Any]]  = field(default_factory=list)
+    resilience_hub	    : List[Dict[str, Any]]  = field(default_factory=list)
+    logs			    : Dict[str, Any]        = field(default_factory=dict)
 
 class AWSResourceType(str, Enum):
-    ACCOUNT         = "account"
-    CONFIG          = "config"
-    SERVICE         = "service"
-    COST            = "cost"
-    SECURITY        = "security"
-    INVENTORY       = "inventory"
-    MARKETPLACE     = "marketplace"
-    TRUSTED_ADVISOR = "trusted_advisor"
-    HEALTH          = "health"
-    APPLICATION     = "application"
-    RESILIENCE_HUB  = "resilience_hub"
-    LOGS            = "logs"
+    ACCOUNT             = "account"
+    CONFIG              = "config"
+    SERVICE             = "service"
+    COST                = "cost"
+    SECURITY            = "security"
+    INVENTORY           = "inventory"
+    MARKETPLACE         = "marketplace"
+    TRUSTED_ADVISOR     = "trusted_advisor"
+    HEALTH              = "health"
+    APPLICATION         = "application"
+    RESILIENCE_HUB      = "resilience_hub"
+    COMPUTE_OPTIMIZER   = "compute_optimizer"
+    CONFIG_INVENTORY    = "config_inventory"
+    SERVICE_RESOURCES   = "service_resources"
+    LOGS                = "logs"
 
 # b. AWS Resource Interface - To ensure the data format is strictly governed
 class AWSResourceInterface:
@@ -140,6 +149,9 @@ class AWSResourceInterface:
             "health"			: self.data.health,
             "application"		: self.data.application,
             "resilience_hub"	: self.data.resilience_hub,
+            "service_resources"	: self.data.service_resources,
+            "compute_optimizer"	: self.data.compute_optimizer,
+            "config_inventory"	: self.data.config_inventory,
             "logs"				: self.data.logs
         }
 
@@ -179,6 +191,7 @@ class AWSBoto3Permissions:
                 "action": "get_caller_identity",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "account_contact": {
                 "name": "Account Contact",
@@ -186,6 +199,7 @@ class AWSBoto3Permissions:
                 "action": "get_contact_information",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "account": {
                 "name": "Account",
@@ -193,6 +207,7 @@ class AWSBoto3Permissions:
                 "action": "get_account_information",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "ce": {
                 "name": "Cost Explorer",
@@ -208,6 +223,7 @@ class AWSBoto3Permissions:
                     "Filter": {"Dimensions": {"Key": "USAGE_TYPE", "Values": ["*"]}},
                 },
                 "status": False,
+                "reqd"  : True
             },
             "securityhub": {
                 "name": "Security Hub",
@@ -215,6 +231,7 @@ class AWSBoto3Permissions:
                 "action": "describe_hub",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "resiliencehub": {
                 "name": "Resilience Hub",
@@ -222,6 +239,7 @@ class AWSBoto3Permissions:
                 "action": "list_apps",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "config": {
                 "name": "AWS Config",
@@ -229,6 +247,7 @@ class AWSBoto3Permissions:
                 "action": "describe_configuration_recorders",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "iam": {
                 "name": "IAM",
@@ -236,13 +255,15 @@ class AWSBoto3Permissions:
                 "action": "list_users",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "ec2": {
                 "name": "EC2",
-                "client": boto3.client("ec2"),
+                "client": boto3.client("ec2", region_name=REGION),
                 "action": "describe_regions",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "application-signals": {
                 "name": "Application Signals",
@@ -250,6 +271,7 @@ class AWSBoto3Permissions:
                 "action": "close",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "ssm": {
                 "name": "Systems Manager",
@@ -257,6 +279,7 @@ class AWSBoto3Permissions:
                 "action": "describe_instance_information",
                 "params": params,
                 "status": False,
+                "reqd"  : True
             },
             "inspector2": {
                 "name": "Inspector",
@@ -264,13 +287,63 @@ class AWSBoto3Permissions:
                 "action": "list_findings",
                 "params": {},
                 "status": False,
+                "reqd"  : True
             },
             "wafv2": {
                 "name": "WAF v2",
-                "client": boto3.client("wafv2"),
+                "client": boto3.client("wafv2", region_name=REGION),
                 "action": "list_web_acls",
                 "params": {"Scope": "REGIONAL"},
                 "status": False,
+                "reqd"  : True
+            },
+            "rds": {
+                "name": "RDS (Optional)",
+                "client": boto3.client("rds", region_name=REGION),
+                "action": "describe_db_instances",
+                "params": params,
+                "status": False,
+                "reqd"  : False
+            },
+            "s3": {
+                "name": "S3 (Optional)",
+                "client": boto3.client("s3", region_name=REGION),
+                "action": "list_buckets",
+                "params": params,
+                "status": False,
+                "reqd"  : False
+            },
+            "elbv2": {
+                "name": "ELB v2 (Optional)",
+                "client": boto3.client("elbv2", region_name=REGION),
+                "action": "describe_load_balancers",
+                "params": params,
+                "status": False,
+                "reqd"  : False
+            },
+            "autoscaling": {
+                "name": "Auto Scaling (Optional)",
+                "client": boto3.client("autoscaling", region_name=REGION),
+                "action": "describe_auto_scaling_groups",
+                "params": params,
+                "status": False,
+                "reqd"  : False
+            },
+            "lambda": {
+                "name": "Lambda (Optional)",
+                "client": boto3.client("lambda", region_name=REGION),
+                "action": "list_functions",
+                "params": params,
+                "status": False,
+                "reqd"  : False
+            },
+            "compute-optimizer": {
+                "name": "Compute Optimizer (Optional)",
+                "client": boto3.client("compute-optimizer", region_name=REGION),
+                "action": "get_ec2_instance_recommendations",
+                "params": params,
+                "status": False,
+                "reqd"  : False
             },
         }
 
@@ -308,7 +381,10 @@ class AWSBoto3Permissions:
             if val["status"] == True:
                 passed += 1
             elif val["status"] == False:
-                failed += 1
+                if(val['reqd'] == False):
+                    passed += 1
+                else:
+                    failed += 1
 
             counter += 1
 
@@ -345,6 +421,9 @@ class AWSResourceManager:
                                 "health_status" 		    : "Pass",			
                                 "application_status" 	    : "Pass",	
                                 "resilience_hub_status"     : "Pass",
+                                "compute_optimizer_status"  : "Pass",
+                                "service_resources_status"  : "Pass",
+                                "config_inventory_status"   : "Pass",
                                 'message'			        : []
                             }
         # Default to 1 days ago since that's the maximum for detailed data
@@ -436,6 +515,8 @@ class AWSResourceManager:
             'account_email': None,
             'account_status': "ACTIVE",
             'account_arn': None,
+            'partner_name': PARTNER if PARTNER else 'None',
+            'customer_name': CUSTOMER if CUSTOMER else 'None',
             'joined_method': None,
             'joined_timestamp': acc.data.get("AccountCreatedDate") if acc is not None else None,
             'contact_info': {},
@@ -596,24 +677,27 @@ class AWSResourceManager:
             ce_client = boto3.client('ce')
             start_date = self.start_date.strftime('%Y-%m-%d')
             end_date = self.end_date.strftime('%Y-%m-%d')
-            account_filter = {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
             
-            # Get current and previous costs
+            # Remove account filter for individual accounts
+            # account_filter = {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+            
+            # Get current costs (no filter needed in individual account)
             current_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': start_date, 'End': end_date},
                 Granularity=self.interval,
                 Metrics=['UnblendedCost'],
-                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
-                Filter=account_filter
+                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}]
             ))
             
+            # Fix previous period calculation - use same duration
+            prev_end = self.start_date.strftime('%Y-%m-%d')
             prev_start = (self.start_date - timedelta(days=self.days)).strftime('%Y-%m-%d')
+            
             previous_costs = AWSResponse(ce_client.get_cost_and_usage(
-                TimePeriod={'Start': prev_start, 'End': start_date},
+                TimePeriod={'Start': prev_start, 'End': prev_end},
                 Granularity=self.interval,
                 Metrics=['UnblendedCost'],
-                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
-                Filter=account_filter
+                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}]
             ))
             
             # Calculate totals
@@ -640,8 +724,7 @@ class AWSResourceManager:
                 forecast = AWSResponse(ce_client.get_cost_forecast(
                     TimePeriod={'Start': end_date, 'End': forecast_end},
                     Metric='UNBLENDED_COST',
-                    Granularity=self.interval,
-                    Filter=account_filter
+                    Granularity=self.interval
                 ))
                 forecast_data = [{'period': {'start': point['TimePeriod']['Start'], 'end': point['TimePeriod']['End']}, 
                                  'amount': float(point['MeanValue'])}
@@ -694,7 +777,6 @@ class AWSResourceManager:
         except Exception as e:
             print(f"Error getting patch details for {instance_id}: {str(e)}")
             return []
-
 
     #5. Fetching Inventory Data from Systems Manager
     def get_inventory(self):
@@ -799,7 +881,7 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.INVENTORY, status="Fail", value={'inventory': str(e)})
             return None
 
-    #6.Fetching Security data across Security hub, Guard Duty, IAM, KMS, WAF, Inspector, Trusted Advisor
+    #6.Fetching Security data across Security hub, Guard Duty, IAM, KMS, WAF, Inspector and Trusted Advisor.
     def get_security(self):
         try:
             result = {
@@ -848,10 +930,9 @@ class AWSResourceManager:
             # 10. Trusted Advisor
             #result['trusted_advisor'] = self.get_trusted_advisor()
             
-            
-            
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)
             self.set_log(def_type=AWSResourceType.SECURITY, status="Pass")
+
             return result
             
         except Exception as e:
@@ -866,19 +947,23 @@ class AWSResourceManager:
                 
             securityhub = boto3.client('securityhub', region_name=REGION)
             service_findings = {}
-            next_token = None
             
+            # Query 1: Get NEW findings created today
+            next_token = None
             while True:
                 params = {
                     'Filters': {
-                        'CreatedAt'     : [{'Start': self.start_date.isoformat(), 'End': self.end_date.isoformat()}],
-                        'AwsAccountId'  : [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
+                        'CreatedAt': [{'Start': self.start_date.isoformat(), 'End': self.end_date.isoformat()}],
+                        'AwsAccountId': [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
                         'SeverityLabel': [
-                        {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
-                        {'Value': 'HIGH', 'Comparison': 'EQUALS'},
-                        {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
-                        {'Value': 'LOW', 'Comparison': 'EQUALS'}
-                    ]
+                            {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
+                            {'Value': 'HIGH', 'Comparison': 'EQUALS'},
+                            {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
+                            {'Value': 'LOW', 'Comparison': 'EQUALS'}
+                        ],
+                        'WorkflowStatus': [
+                            {'Value': 'NEW', 'Comparison': 'EQUALS'}
+                        ],
                     },
                     'MaxResults': 100
                 }
@@ -888,71 +973,113 @@ class AWSResourceManager:
             
                 response = AWSResponse(securityhub.get_findings(**params))
                 if response.status != 200:
-                    return None
+                    break
                 
                 for finding in response.data['Findings']:
-                    generator_id = finding.get('GeneratorId', '')
-                    service = generator_id.split('/')[0] if '/' in generator_id else 'Unknown'
-                    generator = generator_id.split('/')[1].split('.')[0] if '/' in generator_id else 'Unknown'
-                    
-                    if service not in service_findings:
-                        service_findings[service] = {
-                            'service': service,
-                            'total_findings': 0,
-                            'severity_counts': {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFORMATIONAL': 0},
-                            'open_findings': 0,
-                            'resolved_findings': 0,
-                            'findings': []
-                        }
-                    
-                    service_findings[service]['total_findings'] += 1
-                    severity = finding.get('Severity', {}).get('Label', 'UNKNOWN')
-                    
-                    if severity in service_findings[service]['severity_counts']:
-                        service_findings[service]['severity_counts'][severity] += 1
-                    
-                    workflow_status = finding.get('Workflow', {}).get('Status')
-                    if workflow_status == 'RESOLVED':
-                        service_findings[service]['resolved_findings'] += 1
-                    else:
-                        service_findings[service]['open_findings'] += 1
-                    
-                    resource = finding.get('Resources', [{}])[0]
-                    service_findings[service]['findings'].append({
-                        'finding_id': finding.get('Id'),
-                        'service': finding.get('Id').split("/")[1].split('.')[0] if finding.get('Id') and '/' in finding.get('Id') else 'Unknown',
-                        'title': finding.get('Title'),
-                        'description': finding.get('Description'),
-                        'severity': severity,
-                        'status': workflow_status or 'OPEN',
-                        'resource_type': resource.get('Type'),
-                        'resource_id': resource.get('Id'),
-                        'created_at': finding.get('CreatedAt'),
-                        'updated_at': finding.get('UpdatedAt'),
-                        'recommendation': finding.get('Remediation', {}).get('Recommendation', {}).get('Text'),
-                        'compliance_status': finding.get('Compliance', {}).get('Status'),
-                        'region': finding.get('Region'),
-                        'workflow_state': finding.get('Workflow', {}).get('Status', 'NEW'),
-                        'record_state': finding.get('RecordState', 'ACTIVE'),
-                        'product_name': finding.get('ProductName'),
-                        'company_name': finding.get('CompanyName'),
-                        'product_arn': finding.get('ProductArn'),
-                        'generator_id': finding.get('GeneratorId'),
-                        'generator': generator
-                    })
+                    self._process_finding(finding, service_findings)
             
                 next_token = response.data.get('NextToken')
                 if not next_token:
                     break
             
-            result = sorted(service_findings.values(), key=lambda x: x['total_findings'], reverse=True)
+            # Query 2: Get RESOLVED findings updated today
+            next_token = None
+            while True:
+                params = {
+                    'Filters': {
+                        'UpdatedAt'     : [{'Start': self.start_date.isoformat(), 'End': self.end_date.isoformat()}],
+                        'AwsAccountId'  : [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
+                        'WorkflowStatus': [
+                            {'Value': 'RESOLVED', 'Comparison': 'EQUALS'},
+                            {'Value': 'SUPPRESSED', 'Comparison': 'EQUALS'}
+                        ],
+                        'SeverityLabel' : [
+                            {'Value': 'INFORMATIONAL', 'Comparison': 'NOT_EQUALS'}
+                        ],
+                    },
+                    'MaxResults': 100
+                }
+                
+                if next_token:
+                    params['NextToken'] = next_token
 
+                response = AWSResponse(securityhub.get_findings(**params))
+                if response.status != 200:
+                    break
+                
+                for finding in response.data['Findings']:
+                    self._process_finding(finding, service_findings)
+
+                next_token = response.data.get('NextToken')
+                if not next_token:
+                    break
+
+            
+            result = sorted(service_findings.values(), key=lambda x: x['total_findings'], reverse=True)
             self.set_log(def_type=AWSResourceType.SECURITY)
+               
             return result
             
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'security_hub': str(e)})
             return None
+
+
+    def _process_finding(self, finding, service_findings):
+        finding_id = finding.get('Id')
+        
+        # Skip if already processed
+        for service_data in service_findings.values():
+            if any(f['finding_id'] == finding_id for f in service_data['findings']):
+                return
+        
+        service = finding.get('ProductName', '')
+        if service not in service_findings:
+            service_findings[service] = {
+                'service': service,
+                'total_findings': 0,
+                'severity_counts': {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFORMATIONAL': 0},
+                'open_findings': 0,
+                'resolved_findings': 0,
+                'findings': []
+            }
+        
+        service_findings[service]['total_findings'] += 1
+        severity = finding.get('Severity', {}).get('Label', 'UNKNOWN')
+        
+        if severity in service_findings[service]['severity_counts']:
+            service_findings[service]['severity_counts'][severity] += 1
+        
+        workflow_status = finding.get('Workflow', {}).get('Status')
+        if workflow_status == 'RESOLVED':
+            service_findings[service]['resolved_findings'] += 1
+        else:
+            service_findings[service]['open_findings'] += 1
+        
+        resource = finding.get('Resources', [{}])[0]
+        service_findings[service]['findings'].append({
+            'finding_id': finding.get('Id'),
+            'service': resource.get('Type'),
+            'title': finding.get('Title'),
+            'description': finding.get('Description'),
+            'severity': severity,
+            'status': workflow_status or 'OPEN',
+            'resource_type': resource.get('Type'),
+            'resource_id': resource.get('Id'),
+            'created_at': finding.get('CreatedAt'),
+            'updated_at': finding.get('UpdatedAt'),
+            'recommendation': finding.get('Remediation', {}).get('Recommendation', {}).get('Text'),
+            'compliance_status': finding.get('Compliance', {}).get('Status'),
+            'region': finding.get('Region'),
+            'workflow_state': finding.get('WorkflowState', ''),
+            'record_state': finding.get('RecordState', 'ACTIVE'),
+            'product_name': finding.get('ProductName'),
+            'company_name': finding.get('CompanyName'),
+            'product_arn': finding.get('ProductArn'),
+            'generator_id': finding.get('GeneratorId'),
+            'generator': finding.get('ProductName', '')
+        })
+
 
     #Getting from Guard Duty
     def get_guard_duty_security(self):
@@ -1786,6 +1913,258 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.MARKETPLACE, status="Fail", value={'marketplace': str(e)})
             return []
 
+    #12. Fetching Data from Compute Optimizer
+    def get_compute_optimizer(self):
+        try:
+            recommendations = []
+            compute_optimizer = boto3.client('compute-optimizer', region_name=REGION)
+            
+            def create_standard_recommendation(account_id, resource_type, resource_arn, resource_name, finding, **kwargs):
+                return {
+                    'account_id': account_id,
+                    'resource_type': resource_type,
+                    'resource_arn': resource_arn,
+                    'resource_name': resource_name,
+                    'finding': finding,
+                    'current_instance_type': kwargs.get('current_instance_type'),
+                    'current_memory_size': kwargs.get('current_memory_size'),
+                    'current_volume_type': kwargs.get('current_volume_type'),
+                    'current_volume_size': kwargs.get('current_volume_size'),
+                    'recommended_instance_type': kwargs.get('recommended_instance_type'),
+                    'recommended_memory_size': kwargs.get('recommended_memory_size'),
+                    'recommended_volume_type': kwargs.get('recommended_volume_type'),
+                    'recommended_volume_size': kwargs.get('recommended_volume_size'),
+                    'savings_opportunity_percentage': kwargs.get('savings_opportunity_percentage'),
+                    'estimated_monthly_savings_usd': kwargs.get('estimated_monthly_savings_usd'),
+                    'performance_risk': kwargs.get('performance_risk'),
+                    'cpu_utilization_max': kwargs.get('cpu_utilization_max'),
+                    'memory_utilization_avg': kwargs.get('memory_utilization_avg'),
+                    'migration_effort': kwargs.get('migration_effort')
+                }
+            
+            # Get EC2 recommendations
+            try:
+                ec2_resp = AWSResponse(compute_optimizer.get_ec2_instance_recommendations())
+                for rec in ec2_resp.data.get('instanceRecommendations', []):
+                    recommendations.append(create_standard_recommendation(
+                        self.account_id, 'EC2', rec.get('instanceArn'), rec.get('instanceName'),
+                        rec.get('finding'),
+                        current_instance_type=rec.get('currentInstanceType'),
+                        recommended_instance_type=rec.get('recommendationOptions', [{}])[0].get('instanceType') if rec.get('recommendationOptions') else None,
+                        savings_opportunity_percentage=rec.get('recommendationOptions', [{}])[0].get('savingsOpportunity', {}).get('savingsOpportunityPercentage') if rec.get('recommendationOptions') else None,
+                        estimated_monthly_savings_usd=rec.get('recommendationOptions', [{}])[0].get('savingsOpportunity', {}).get('estimatedMonthlySavings', {}).get('value') if rec.get('recommendationOptions') else None,
+                        performance_risk=rec.get('recommendationOptions', [{}])[0].get('performanceRisk') if rec.get('recommendationOptions') else None,
+                        cpu_utilization_max=max([u.get('maximum', 0) for u in rec.get('utilizationMetrics', []) if u.get('name') == 'Cpu'], default=0),
+                        memory_utilization_avg=sum([u.get('maximum', 0) for u in rec.get('utilizationMetrics', []) if u.get('name') == 'Memory']) / len([u for u in rec.get('utilizationMetrics', []) if u.get('name') == 'Memory']) if [u for u in rec.get('utilizationMetrics', []) if u.get('name') == 'Memory'] else 0
+                    ))
+            except Exception as e:
+                print(f"Error getting EC2 recommendations: {str(e)}")
+            
+            # Get EBS recommendations
+            try:
+                ebs_resp = AWSResponse(compute_optimizer.get_ebs_volume_recommendations())
+                for rec in ebs_resp.data.get('volumeRecommendations', []):
+                    recommendations.append(create_standard_recommendation(
+                        self.account_id, 'EBS', rec.get('volumeArn'), None,
+                        rec.get('finding'),
+                        current_volume_type=rec.get('currentConfiguration', {}).get('volumeType'),
+                        current_volume_size=rec.get('currentConfiguration', {}).get('volumeSize'),
+                        recommended_volume_type=rec.get('volumeRecommendationOptions', [{}])[0].get('configuration', {}).get('volumeType') if rec.get('volumeRecommendationOptions') else None,
+                        recommended_volume_size=rec.get('volumeRecommendationOptions', [{}])[0].get('configuration', {}).get('volumeSize') if rec.get('volumeRecommendationOptions') else None,
+                        savings_opportunity_percentage=rec.get('volumeRecommendationOptions', [{}])[0].get('savingsOpportunity', {}).get('savingsOpportunityPercentage') if rec.get('volumeRecommendationOptions') else None,
+                        estimated_monthly_savings_usd=rec.get('volumeRecommendationOptions', [{}])[0].get('savingsOpportunity', {}).get('estimatedMonthlySavings', {}).get('value') if rec.get('volumeRecommendationOptions') else None,
+                        performance_risk=rec.get('volumeRecommendationOptions', [{}])[0].get('performanceRisk') if rec.get('volumeRecommendationOptions') else None
+                    ))
+            except Exception as e:
+                print(f"Error getting EBS recommendations: {str(e)}")
+            
+            # Get Lambda recommendations
+            try:
+                lambda_resp = AWSResponse(compute_optimizer.get_lambda_function_recommendations())
+                for rec in lambda_resp.data.get('lambdaFunctionRecommendations', []):
+                    recommendations.append(create_standard_recommendation(
+                        self.account_id, 'Lambda', rec.get('functionArn'), rec.get('functionName'),
+                        rec.get('finding'),
+                        current_memory_size=rec.get('currentMemorySize'),
+                        recommended_memory_size=rec.get('memorySizeRecommendationOptions', [{}])[0].get('memorySize') if rec.get('memorySizeRecommendationOptions') else None,
+                        savings_opportunity_percentage=rec.get('memorySizeRecommendationOptions', [{}])[0].get('savingsOpportunity', {}).get('savingsOpportunityPercentage') if rec.get('memorySizeRecommendationOptions') else None,
+                        estimated_monthly_savings_usd=rec.get('memorySizeRecommendationOptions', [{}])[0].get('savingsOpportunity', {}).get('estimatedMonthlySavings', {}).get('value') if rec.get('memorySizeRecommendationOptions') else None
+                    ))
+            except Exception as e:
+                print(f"Error getting Lambda recommendations: {str(e)}")
+            
+            self.data.set_data(attr=AWSResourceType.COMPUTE_OPTIMIZER, data=recommendations)
+            self.set_log(def_type=AWSResourceType.COMPUTE_OPTIMIZER)
+            return recommendations
+            
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.COMPUTE_OPTIMIZER, status="Fail", value={'compute_optimizer': str(e)})
+            return None
+
+    #13. Fetching data from Service Resources
+    def get_services_resources(self):
+        try:
+            resources = []
+            
+            def create_standard_resource(service_name, resource_type, resource_id, resource_name, region, availability_zone, state, **kwargs):
+                return {
+                    'service_name': service_name,
+                    'resource_type': resource_type,
+                    'resource_id': resource_id,
+                    'resource_name': resource_name,
+                    'region': region,
+                    'availability_zone': availability_zone,
+                    'state': state,
+                    'instance_type': kwargs.get('instance_type'),
+                    'vpc_id': kwargs.get('vpc_id'),
+                    'engine': kwargs.get('engine'),
+                    'instance_class': kwargs.get('instance_class'),
+                    'multi_az': kwargs.get('multi_az'),
+                    'size_gb': kwargs.get('size_gb'),
+                    'volume_type': kwargs.get('volume_type'),
+                    'creation_date': kwargs.get('creation_date'),
+                    'type': kwargs.get('type'),
+                    'scheme': kwargs.get('scheme'),
+                    'instance_count': kwargs.get('instance_count'),
+                    'min_size': kwargs.get('min_size'),
+                    'max_size': kwargs.get('max_size'),
+                    'available_ip_count': kwargs.get('available_ip_count')
+                }
+            
+            # EC2 Instances
+            ec2 = boto3.client('ec2', region_name=REGION)
+            resp = AWSResponse(ec2.describe_instances())
+            for reservation in resp.data.get('Reservations', []):
+                for instance in reservation.get('Instances', []):
+                    resources.append(create_standard_resource(
+                        'EC2', 'Instance', instance.get('InstanceId'),
+                        next((tag['Value'] for tag in instance.get('Tags', []) if tag['Key'] == 'Name'), ''),
+                        REGION, instance.get('Placement', {}).get('AvailabilityZone'),
+                        instance.get('State', {}).get('Name'),
+                        instance_type=instance.get('InstanceType'),
+                        vpc_id=instance.get('VpcId')
+                    ))
+            
+            # RDS Instances
+            rds = boto3.client('rds', region_name=REGION)
+            resp = AWSResponse(rds.describe_db_instances())
+            for db in resp.data.get('DBInstances', []):
+                resources.append(create_standard_resource(
+                    'RDS', 'DBInstance', db.get('DBInstanceIdentifier'),
+                    db.get('DBInstanceIdentifier'), REGION, db.get('AvailabilityZone'),
+                    db.get('DBInstanceStatus'),
+                    engine=db.get('Engine'),
+                    instance_class=db.get('DBInstanceClass'),
+                    multi_az=db.get('MultiAZ')
+                ))
+            
+            # EBS Volumes
+            resp = AWSResponse(ec2.describe_volumes())
+            for volume in resp.data.get('Volumes', []):
+                resources.append(create_standard_resource(
+                    'EBS', 'Volume', volume.get('VolumeId'),
+                    next((tag['Value'] for tag in volume.get('Tags', []) if tag['Key'] == 'Name'), ''),
+                    REGION, volume.get('AvailabilityZone'), volume.get('State'),
+                    size_gb=volume.get('Size', 0),
+                    volume_type=volume.get('VolumeType')
+                ))
+            
+            # S3 Buckets
+            s3 = boto3.client('s3', region_name=REGION)
+            resp = AWSResponse(s3.list_buckets())
+            for bucket in resp.data.get('Buckets', []):
+                resources.append(create_standard_resource(
+                    'S3', 'Bucket', bucket.get('Name'), bucket.get('Name'),
+                    REGION, None, 'Active',
+                    creation_date=bucket.get('CreationDate').isoformat() if bucket.get('CreationDate') else None
+                ))
+            
+            # Load Balancers
+            elb = boto3.client('elbv2', region_name=REGION)
+            resp = AWSResponse(elb.describe_load_balancers())
+            for lb in resp.data.get('LoadBalancers', []):
+                az_list = [az.get('ZoneName') for az in lb.get('AvailabilityZones', [])]
+                resources.append(create_standard_resource(
+                    'ELB', 'LoadBalancer', lb.get('LoadBalancerName'),
+                    lb.get('LoadBalancerName'), REGION, ','.join(az_list),
+                    lb.get('State', {}).get('Code'),
+                    type=lb.get('Type'),
+                    scheme=lb.get('Scheme')
+                ))
+            
+            # Auto Scaling Groups
+            asg = boto3.client('autoscaling', region_name=REGION)
+            resp = AWSResponse(asg.describe_auto_scaling_groups())
+            for group in resp.data.get('AutoScalingGroups', []):
+                resources.append(create_standard_resource(
+                    'AutoScaling', 'AutoScalingGroup', group.get('AutoScalingGroupName'),
+                    group.get('AutoScalingGroupName'), REGION,
+                    ','.join(group.get('AvailabilityZones', [])),
+                    'Active' if group.get('Instances') else 'Inactive',
+                    instance_count=len(group.get('Instances', [])),
+                    min_size=group.get('MinSize'),
+                    max_size=group.get('MaxSize')
+                ))
+            
+            # Subnets
+            resp = AWSResponse(ec2.describe_subnets())
+            for subnet in resp.data.get('Subnets', []):
+                resources.append(create_standard_resource(
+                    'VPC', 'Subnet', subnet.get('SubnetId'),
+                    next((tag['Value'] for tag in subnet.get('Tags', []) if tag['Key'] == 'Name'), ''),
+                    REGION, subnet.get('AvailabilityZone'), subnet.get('State'),
+                    available_ip_count=subnet.get('AvailableIpAddressCount', 0),
+                    vpc_id=subnet.get('VpcId')
+                ))
+            
+            self.data.set_data(attr=AWSResourceType.SERVICE_RESOURCES, data=resources)
+            self.set_log(def_type=AWSResourceType.SERVICE_RESOURCES)
+            return resources
+            
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.SERVICE_RESOURCES, status="Fail", value={'service_resources': str(e)})
+            return None
+
+    #14. Fetchin Inventory from Config
+    def get_config_resource_inventory(self):
+        try:
+            # Use your existing service_resources data as inventory
+            service_resources = self.get_services_resources()
+            
+            inventory_data = []
+            for resource in service_resources or []:
+                inventory_data.append({
+                    'resource_type': resource.get('service_name', 'Unknown'),
+                    'resource_subtype': resource.get('resource_type', ''),
+                    'resource_id': resource.get('resource_id', ''),
+                    'resource_name': resource.get('resource_name', ''),
+                    'region': resource.get('region', REGION),
+                    'availability_zone': resource.get('availability_zone', ''),
+                    'state': resource.get('state', ''),
+                    'instance_type': resource.get('instance_type', ''),
+                    'instance_class': resource.get('instance_class', ''),
+                    'engine': resource.get('engine', ''),
+                    'vpc_id': resource.get('vpc_id', ''),
+                    'size_gb': resource.get('size_gb', 0),
+                    'volume_type': resource.get('volume_type', ''),
+                    'creation_date': resource.get('creation_date', ''),
+                    'multi_az': resource.get('multi_az', False),
+                    'scheme': resource.get('scheme', ''),
+                    'type': resource.get('type', ''),
+                    'instance_count': resource.get('instance_count', 0),
+                    'min_size': resource.get('min_size', 0),
+                    'max_size': resource.get('max_size', 0),
+                    'available_ip_count': resource.get('available_ip_count', 0)
+                })
+            
+            self.data.set_data(attr=AWSResourceType.CONFIG_INVENTORY, data=inventory_data)
+            self.set_log(def_type=AWSResourceType.CONFIG_INVENTORY, status="Pass")
+            return inventory_data
+            
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.CONFIG_INVENTORY, status="Fail", value={'config_inventory': str(e)})
+            return []
+
 def get_data(interval="DAILY", start_date=None, end_date=None):
     import time
     start_time = time.time()
@@ -1857,6 +2236,21 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
     step_start = time.time()
     aws.get_marketplace()
     process_times['marketplace'] = round(time.time() - step_start, 2)
+    
+    #12. Fetch Compute Optimizer Data
+    step_start = time.time()
+    aws.get_compute_optimizer()
+    process_times['compute_optimizer'] = round(time.time() - step_start, 2)
+    
+    #13. Get Service Resources
+    step_start = time.time()
+    aws.get_services_resources()
+    process_times['services_resources'] = round(time.time() - step_start, 2)
+    
+    #14. Get Config Inventory
+    step_start = time.time()
+    aws.get_config_resource_inventory()
+    process_times['config_inventory'] = round(time.time() - step_start, 2)
 
     #All. Get All Data
     step_start = time.time()
@@ -1901,36 +2295,51 @@ def load_current_data(interval="DAILY", end_date=None):
     
     return data
 
-def load_historical_data():
-    import time
+def load_historical_data(start_date=None, end_date=None):
+ 
     overall_start_time = time.time()
     
-    till_date   = datetime.now()
-    start_date  = datetime(till_date.year, 1, 1)  # January 1st of current year
-    interval    = "DAILY"
+    # Convert string dates to datetime objects
+    def parse_date(date_str):
+        if isinstance(date_str, str):
+            try:
+                # Parse format like "2-4-2025" (day-month-year)
+                day, month, year = map(int, date_str.split('-'))
+                return datetime(year, month, day)
+            except:
+                print(f"{ERROR} Invalid date format: {date_str}. Expected format: d-m-yyyy")
+                return None
+        return date_str
+    
+    # Set default dates
+    if end_date:
+        till_date = parse_date(end_date)
+        if till_date is None:
+            till_date = datetime.now()
+    else:
+        till_date = datetime.now()
+    
+    if start_date:
+        start_date = parse_date(start_date)
+        if start_date is None:
+            start_date = datetime(till_date.year, 1, 1)
+    else:
+        start_date = datetime(till_date.year, 1, 1)  # January 1st of current year
+    
+    interval = "DAILY"
     
     print(f"{CALENDAR}  Will process daily data from {start_date.strftime('%d-%m-%Y')} to {till_date.strftime('%d-%m-%Y')}")
 
-    current                 = start_date
-    count                   = 0
-    total_processing_time   = 0
-    processing_times        = []
+    current = start_date
+    count = 0
+    total_processing_time = 0
+    processing_times = []
     
     while current <= till_date:
         formatted_date = current.strftime('%d-%m-%Y')
         day_start_time = time.time()
         
         try:
-            last_day_of_month   = monthrange(current.year, current.month)[1]
-            is_last_day         = current.day == last_day_of_month
-            #interval            = "MONTHLY" if(is_last_day) else "DAILY"
-
-            #if(is_last_day):
-            #    daily_start = time.time()
-            #    data = get_data(interval="DAILY", end_date=current)
-            #    daily_time = round(time.time() - daily_start, 2)
-            #    print(f"{SUCCESS} DAILY : {formatted_date} Loaded (took {daily_time}s)")
-
             interval_start = time.time()
             data = get_data(interval=interval, end_date=current)
             interval_time = round(time.time() - interval_start, 2)
@@ -2017,15 +2426,18 @@ def lambda_handler(event=None, context=None):
         print("*"*15,"Connected","*"*15)
         if (event is not None and isinstance(event, dict) and "history" in event and (event['history'] == True or event['history'] == "True")):
             print("Loading Historical Data")
-            history_start = time.time()
-            history_data = load_historical_data()
-            history_time = round(time.time() - history_start, 2)
-            has_history = True
+            history_start       = time.time()
+            history_data_start  = event['start'] if("start" in event) else None
+            history_data_end    = event['end'] if("end" in event) else None
+            history_data        = load_historical_data(start_date=history_data_start, end_date=history_data_end)
+            history_time        = round(time.time() - history_start, 2)
+            has_history         = True
+
             timing_info['historical_load_time'] = history_time
             
             print(f"{SUCCESS if(has_history) else ERROR} History Data (took {history_time}s)")
         else:
-            print(f"{INFO} Loading Daily & Monthly Data")
+            print(f"{INFO} Loading Daily Data")
             daily_start = time.time()
             daily_data = load_current_data(interval="DAILY")
             daily_time = round(time.time() - daily_start, 2)
@@ -2033,21 +2445,13 @@ def lambda_handler(event=None, context=None):
             
             if(daily_data and daily_data is not None and 'path' in daily_data):
                 has_daily = True
-                ## Uncomment if you want to load monthly data
-                # monthly_start = time.time()
-                # monthly_data = load_current_data(interval="MONTHLY")
-                # monthly_time = round(time.time() - monthly_start, 2)
-                # timing_info['monthly_load_time'] = monthly_time
-                # 
-                # if(monthly_data and monthly_data is not None and 'path' in monthly_data):
-                #     has_monthly = True
-          
+         
             status = process_data_status(has_daily, has_monthly, has_history, daily_data, monthly_data, history_data, load_time=timing_info)
             print(status[0])
             print(status[1])
             print(status[2])
 
-        total_time = round(time.time() - start_time, 2)
+        total_time                          = round(time.time() - start_time, 2)
         timing_info['total_execution_time'] = total_time
         print(f"{TIMING} Total execution time: {total_time}s")
         print("*"*14,"Disconnected","*"*13)
@@ -2066,5 +2470,15 @@ def lambda_handler(event=None, context=None):
 
 if __name__ == "__main__":
     
-    temp = lambda_handler({"history":False})
-    #print(temp)
+    """ 
+    1. Run Historical Data Sets 
+    - This will allow you to run data for a given period of time.
+    """
+    start   = "5-9-2025"    # September 5 2025
+    end     = "10-9-2025"   # September 10 2025
+    #result  = lambda_handler({"history":True, "start":start, "end":end})
+    
+    """ 2. Run Daily Data Sets """
+    result  = lambda_handler({"history":False})
+
+    #print(result)
