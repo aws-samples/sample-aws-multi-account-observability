@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ## What is AWS Multi-Account Observability & Analytics?
-A comprehensive AWS multi-account observability view that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and designed for enterprise-scale monitoring.
+A comprehensive AWS multi-account observability platform that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and designed for enterprise-scale monitoring with 15+ AWS service integrations, advanced security analytics, and cost optimization insights.
 
 ## Architecture
 
@@ -53,50 +53,58 @@ sample-aws-multi-account-observability/
 - **Agency360-Sender.yml**: Infrastructure template for sender accounts
 - **receiver.py**: Processes JSON data from S3 and loads into Aurora
 - **sender.py**: Collects AWS data and uploads to S3
-- **core-schema.sql**: Complete database schema with 25+ tables
+- **core-schema.sql**: Complete database schema with 30+ tables and advanced analytics
 
 ## Features
 
 ### Data Collection & Processing
-- **Multi-Account Support** : Aggregates data from multiple AWS accounts
-- **Comprehensive Coverage**: Collects 12+ data categories per account
-- **Real-time Processing**  : Lambda-based serverless data processing
-- **Automated Cleanup**     : S3 files automatically deleted after processing
+- **Multi-Account Support**: Aggregates data from unlimited AWS accounts with cross-account security
+- **Comprehensive Coverage**: Collects 15+ data categories per account with deep service integration
+- **Real-time Processing**: Lambda-based serverless data processing with 10GB memory and 15min timeout
+- **Automated Lifecycle**: S3 files automatically moved to loaded/ folder after processing
+- **Historical Data**: Support for backfill operations with custom date ranges
+- **Performance Monitoring**: Processing time metrics and statistics for each data category
+- **Error Handling**: Comprehensive error tracking with Dead Letter Queues and retry logic
 
-### Data Categories
-- **Account Information**: Account details, contact info, alternate contacts
-- **Cost Analysis**: Current/previous period costs, forecasts, service costs
-- **Service Usage**: Detailed AWS service utilization and costs by usage type
-- **Security Posture**: Security Hub findings, GuardDuty alerts, compliance status
-- **Configuration**: AWS Config compliance rules and non-compliant resources
-- **Inventory**: EC2 instances, applications, patches via Systems Manager
-- **Security Services**: KMS keys, WAF rules, CloudTrail, Secrets Manager, ACM
-- **Marketplace**: Third-party software usage and costs
-- **Trusted Advisor**: AWS recommendations and best practices
-- **Health Events**: Service health and maintenance notifications
-- **Application Signals**: Application performance metrics and traces
-- **Resilience Hub**: Disaster recovery assessments and compliance
-- **Audit Logs**: Data processing status, error tracking, and health scores
+### Data Categories (15+ AWS Services)
+- **Account Management**: Account details, contact info, alternate contacts, partner/customer identification
+- **Cost & Financial Analytics**: Current/previous period costs, forecasts, service costs, optimization opportunities
+- **Service Usage**: Detailed AWS service utilization and costs by usage type across all regions
+- **Comprehensive Security**: Security Hub findings, GuardDuty alerts, compliance status, vulnerability assessments
+- **Security Services**: KMS keys, WAF rules (with compliance analysis), CloudTrail, Secrets Manager, ACM certificates
+- **Configuration Management**: AWS Config compliance rules, non-compliant resources, remediation tracking
+- **Infrastructure Inventory**: EC2 instances, applications, patches via Systems Manager with compliance status
+- **Resource Management**: Multi-service inventory (EC2, RDS, S3, ELB, Auto Scaling, Lambda)
+- **Optimization**: Compute Optimizer recommendations for EC2, EBS, Lambda cost and performance
+- **Marketplace Analytics**: Third-party software usage, costs, and entitlements
+- **Operational Intelligence**: Trusted Advisor recommendations, AWS Health events, best practices
+- **Application Performance**: Application Signals metrics, traces, and performance monitoring
+- **Disaster Recovery**: Resilience Hub assessments, compliance, and recovery planning
+- **Processing & Audit**: Data processing status, error tracking, health scores, and operational logs
 
 ### Analytics & Visualization
-- **25+ Database Tables**: Comprehensive schema for all AWS services
-- **Optimized Views**: Pre-built views for common analytics queries
-- **Cost Optimization**: Identify savings opportunities and spending trends
-- **Security Monitoring**: Track security findings and compliance status
-- **Performance Insights**: Application and infrastructure performance metrics
-- **Compliance Tracking**: Config rules, security findings, and remediation
+- **30+ Database Tables**: Comprehensive schema covering all AWS observability aspects
+- **25+ Optimized Views**: Pre-built analytics views with calculated KPIs and metrics
+- **Executive Dashboards**: Summary views with health scores, cost trends, and security posture
+- **Cost Optimization**: Advanced cost analysis with forecasting and savings opportunities
+- **Security Analytics**: Multi-dimensional security monitoring with compliance tracking
+- **Performance Insights**: Application and infrastructure performance with optimization recommendations
+- **Compliance Management**: Comprehensive tracking of Config rules, security findings, and remediation
+- **Multi-tenant Support**: Product-account relationships for complex organizational structures
 
 ## Technology Stack
 
-- **Compute**: AWS Lambda (Python 3.13, 10GB Memory, 15min Timeout)
-- **Database**: Amazon Aurora PostgreSQL Serverless v2 (0.5-16 ACU)
-- **Storage**: Amazon S3 with KMS encryption and versioning
-- **Infrastructure**: AWS CloudFormation with complete automation
-- **Networking**: VPC with private subnets and VPC endpoints
-- **Security**: IAM roles with least privilege, KMS encryption, Security Groups
-- **Scheduling**: EventBridge rules for automated data collection
-- **Monitoring**: CloudWatch logs and Dead Letter Queues
-- **SDK**: Boto3 1.35.0+ for comprehensive AWS service integration
+- **Compute**: AWS Lambda (Python 3.13, 10GB Memory, 15min Timeout, Reserved Concurrency)
+- **Database**: Amazon Aurora PostgreSQL Serverless v2 (0.5-16 ACU, Multi-AZ, Enhanced Monitoring)
+- **Storage**: Amazon S3 with KMS encryption, versioning, and access logging
+- **Infrastructure**: AWS CloudFormation with complete automation and validation
+- **Networking**: VPC with private subnets, VPC endpoints, and Flow Logs
+- **Security**: IAM roles with least privilege (15+ services), KMS encryption, Security Groups
+- **Analytics**: QuickSight integration with VPC connectivity for secure dashboards
+- **Scheduling**: EventBridge rules for automated data collection (daily at 1-2 AM)
+- **Monitoring**: CloudWatch logs, Dead Letter Queues, and comprehensive error tracking
+- **SDK**: Boto3 1.38.0+ with comprehensive AWS service integration (15+ services)
+- **Multi-tenant**: Partner/customer identification for SaaS deployments
 
 ## Prerequisites
 
@@ -117,7 +125,10 @@ sample-aws-multi-account-observability/
 1. Go to **CloudFormation > Create Stack** in AWS Console
 2. Upload `cloudformation-template/Agency360-Analytics.yml`
 3. Stack name: `a360-analytics`
-4. Parameters: Set `SenderAccounts` to your account IDs (comma-separated)
+4. **Parameters**:
+   - `SenderAccounts`: Comma-separated account IDs (e.g., "123456789012,987654321098")
+   - `CustomerName`: Customer identification (optional)
+   - `PartnerName`: Partner identification (optional)
 5. **Tags (Best Practice)**: Add tags like `Environment=prod`, `Project=a360`, `Owner=your-team`
 6. Check **I acknowledge that AWS CloudFormation might create IAM resources**
 7. Click **Create Stack**
@@ -159,7 +170,13 @@ Use Aurora Query Editor in the AWS Console:
 1. Go to **CloudFormation > Create Stack** in sender account
 2. Upload `cloudformation-template/Agency360-Sender.yml`
 3. Stack name: `a360-sender`
-4. Parameters: Set `AnalyticsBucket` to the S3 bucket from analytics account
+4. **Parameters**:
+   - `AnalyticsAccount`: Analytics account ID
+   - `S3Bucket`: S3 bucket name from analytics account
+   - `AnalyticsKMSKey`: KMS key ARN from analytics account
+   - `CustomerName`: Customer identification (optional)
+   - `PartnerName`: Partner identification (optional)
+   - `Region`: AWS region (default: ap-southeast-1)
 5. **Tags (Best Practice)**: Add tags like `Environment=prod`, `Project=a360`, `Owner=your-team`
 6. Check **I acknowledge that AWS CloudFormation might create IAM resources**
 7. Click **Create Stack**
@@ -176,22 +193,50 @@ aws cloudformation create-stack \
 
 ## Database Schema
 
-### Core Tables (25+ tables)
-- **accounts**: AWS account information and contacts
+### Core Tables (30+ tables)
+**Account & Product Management**:
+- **accounts**: AWS account information with partner/customer support
 - **contact_info**: Account contact information
 - **alternate_contacts**: Billing, operations, security contacts
-- **services**: Service usage and costs by usage type
-- **cost_reports**: Cost analysis, forecasts, and service costs
+- **products**: Product/project management
+- **product_accounts**: Many-to-many account-product relationships
+
+**Cost & Financial Analytics**:
+- **cost_reports**: Period-based cost analysis with forecasting
+- **service_costs**: Top service costs breakdown
+- **cost_forecasts**: Future cost predictions with confidence intervals
+- **services**: Detailed service usage and costs by usage type
+
+**Comprehensive Security**:
 - **security**: Security Hub findings summary by service
 - **findings**: Detailed security findings with remediation
-- **guard_duty_findings**: GuardDuty threat detection findings
+- **guard_duty_findings**: GuardDuty threat detection
 - **kms_keys**: KMS key inventory and rotation status
 - **waf_rules**: WAF configurations and compliance
+- **waf_rules_detailed**: Detailed WAF rule compliance analysis
 - **cloudtrail_logs**: CloudTrail logging status
 - **secrets_manager_secrets**: Secrets inventory
 - **certificates**: ACM certificate management
 - **inspector_findings**: Inspector vulnerability findings
+
+**Infrastructure & Optimization**:
+- **inventory_instances**: EC2 instances via Systems Manager
+- **inventory_applications**: Installed applications
+- **inventory_patches**: Patch compliance status
+- **service_resources**: Multi-service resource inventory
+- **compute_optimizer**: EC2, EBS, Lambda optimization recommendations
 - **config_reports**: Config compliance reports
+- **non_compliant_resources**: Non-compliant resources tracking
+- **config_inventory**: Configuration-based resource tracking
+
+**Operations & Monitoring**:
+- **marketplace_usage**: Marketplace product usage
+- **trusted_advisor_checks**: Trusted Advisor recommendations
+- **health_events**: AWS Health events
+- **application_signals**: Application performance signals
+- **resilience_hub_apps**: Resilience Hub assessments
+- **logs**: Processing status and health scores
+- **log_messages**: Detailed processing messagesiance reports
 - **non_compliant_resources**: Non-compliant resources
 - **inventory_instances**: EC2 instances via Systems Manager
 - **inventory_applications**: Installed applications
