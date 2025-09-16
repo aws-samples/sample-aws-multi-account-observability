@@ -295,7 +295,7 @@ SELECT
     sr.*,
     a.account_id as account,
     a.account_name,
-    CONCAT (a.account_id, '-', a.account_name) as account_full,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
     service_resources sr
@@ -306,6 +306,59 @@ FROM
         ORDER BY account_id, id
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
+
+
+-- Create summary view
+CREATE OR REPLACE VIEW view_service_resources_summary AS
+SELECT 
+    a.account_id,
+    a.account_name,
+    sr.service_name,
+    sr.resource_type,
+    sr.region,
+    sr.availability_zone,
+    COUNT(*) as resource_count,
+    COUNT(CASE WHEN sr.state IN ('running', 'available', 'Active') THEN 1 END) as active_resources,
+    COUNT(CASE WHEN sr.state IN ('stopped', 'Inactive') THEN 1 END) as inactive_resources
+FROM service_resources sr
+LEFT JOIN accounts a ON sr.account_id = a.id
+GROUP BY a.account_id, a.account_name, sr.service_name, sr.resource_type, sr.region, sr.availability_zone;
+
+-- Compute optimizers view
+CREATE OR REPLACE VIEW view_compute_optimizer AS
+SELECT
+    co.*,
+    a.account_id as account,
+    a.account_name,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    compute_optimizer co
+    LEFT JOIN accounts a ON co.account_id = a.account_id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+-- Create summary view
+CREATE OR REPLACE VIEW view_compute_optimizer_summary AS
+SELECT 
+    a.account_id,
+    a.account_name,
+    co.resource_type,
+    co.finding,
+    COUNT(*) as total_recommendations,
+    SUM(co.estimated_monthly_savings_usd) as total_monthly_savings,
+    AVG(co.savings_opportunity_percentage) as avg_savings_percentage,
+    AVG(co.performance_risk) as avg_performance_risk,
+    COUNT(CASE WHEN co.finding = 'NotOptimized' THEN 1 END) as not_optimized_count,
+    COUNT(CASE WHEN co.estimated_monthly_savings_usd > 0 THEN 1 END) as savings_opportunities
+FROM compute_optimizer co
+LEFT JOIN accounts a ON co.account_id = a.account_id
+GROUP BY a.account_id, a.account_name, co.resource_type, co.finding;
+
 
 -- Guard duty findings view
 CREATE OR REPLACE VIEW view_guard_duty_findings AS
@@ -897,3 +950,85 @@ FROM
         ORDER BY account_id, id
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
+
+-- Compute Optimizer View
+CREATE OR REPLACE VIEW view_compute_optimizer_summary AS
+SELECT 
+    a.account_id as account,
+    a.account_name,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name,
+    cor.resource_type,
+    cor.finding,
+    COUNT(*) as resource_count,
+    SUM(cor.estimated_monthly_savings_usd) as total_monthly_savings,
+    AVG(cor.savings_opportunity_percentage) as avg_savings_percentage,
+    AVG(cor.performance_risk) as avg_performance_risk,
+    COUNT(CASE WHEN cor.finding = 'NotOptimized' THEN 1 END) as not_optimized_count,
+    COUNT(CASE WHEN cor.estimated_monthly_savings_usd > 0 THEN 1 END) as savings_opportunities
+FROM compute_optimizer_recommendations cor
+LEFT JOIN accounts a ON cor.account_id = a.account_id
+LEFT JOIN (
+    SELECT DISTINCT ON (account_id) account_id, product_id
+    FROM product_accounts
+    ORDER BY account_id, id
+) pa ON a.id = pa.account_id
+LEFT JOIN products p ON pa.product_id = p.id
+GROUP BY a.account_id, a.account_name, p.name, cor.resource_type, cor.finding;
+
+
+-- Create main view
+CREATE OR REPLACE VIEW view_config_inventory AS
+SELECT
+    ci.*,
+    a.account_id as account,
+    a.account_name,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    config_inventory ci
+    JOIN accounts a ON ci.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+-- Create summary view by resource type
+CREATE OR REPLACE VIEW view_config_inventory_summary AS
+SELECT 
+    a.account_id,
+    a.account_name,
+    ci.resource_type,
+    ci.resource_subtype,
+    ci.region,
+    ci.availability_zone,
+    COUNT(*) as resource_count,
+    COUNT(CASE WHEN ci.state IN ('running', 'available', 'Active', 'in-use') THEN 1 END) as active_resources,
+    COUNT(CASE WHEN ci.state IN ('stopped', 'Inactive', 'terminated') THEN 1 END) as inactive_resources,
+    SUM(CASE WHEN ci.size_gb IS NOT NULL THEN ci.size_gb ELSE 0 END) as total_storage_gb,
+    COUNT(CASE WHEN ci.creation_date IS NOT NULL THEN 1 END) as resources_with_creation_date
+FROM config_inventory ci
+JOIN accounts a ON ci.account_id = a.id
+GROUP BY a.account_id, a.account_name, ci.resource_type, ci.resource_subtype, ci.region, ci.availability_zone;
+
+-- Create account-level summary view
+CREATE OR REPLACE VIEW view_config_inventory_account_summary AS
+SELECT 
+    a.account_id,
+    a.account_name,
+    COUNT(*) as total_resources,
+    COUNT(DISTINCT ci.resource_type) as unique_resource_types,
+    COUNT(DISTINCT ci.region) as regions_used,
+    COUNT(DISTINCT ci.availability_zone) as availability_zones_used,
+    COUNT(CASE WHEN ci.state IN ('running', 'available', 'Active', 'in-use') THEN 1 END) as active_resources,
+    SUM(CASE WHEN ci.size_gb IS NOT NULL THEN ci.size_gb ELSE 0 END) as total_storage_gb,
+    COUNT(CASE WHEN ci.resource_type = 'EC2' THEN 1 END) as ec2_instances,
+    COUNT(CASE WHEN ci.resource_type = 'RDS' THEN 1 END) as rds_instances,
+    COUNT(CASE WHEN ci.resource_type = 'S3' THEN 1 END) as s3_buckets,
+    COUNT(CASE WHEN ci.resource_type = 'EBS' THEN 1 END) as ebs_volumes,
+    COUNT(CASE WHEN ci.resource_type = 'VPC' THEN 1 END) as vpc_resources
+FROM config_inventory ci
+JOIN accounts a ON ci.account_id = a.id
+GROUP BY a.account_id, a.account_name;

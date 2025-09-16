@@ -6,6 +6,8 @@ CREATE TABLE accounts (
     account_email VARCHAR(255) NOT NULL,
     account_status VARCHAR(50) NOT NULL,
     account_arn VARCHAR(255) NOT NULL,
+    partner_name  TEXT DEFAULT 'None',
+    customer_name  TEXT DEFAULT 'None',
     joined_method VARCHAR(50) NOT NULL,
     joined_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     account_type VARCHAR(50),
@@ -17,7 +19,7 @@ CREATE TABLE accounts (
 -- Create the contact_info table
 CREATE TABLE contact_info (
     id SERIAL PRIMARY KEY,
-    account_id VARCHAR(12) REFERENCES accounts(account_id),
+    account_id VARCHAR(12) REFERENCES accounts(account_id) ON DELETE CASCADE,
     address_line1 VARCHAR(255),
     address_line2 VARCHAR(255),
     address_line3 VARCHAR(255),
@@ -37,7 +39,7 @@ CREATE TABLE contact_info (
 -- Create the alternate_contacts table
 CREATE TABLE alternate_contacts (
     id SERIAL PRIMARY KEY,
-    account_id VARCHAR(12) REFERENCES accounts(account_id),
+    account_id VARCHAR(12) REFERENCES accounts(account_id) ON DELETE CASCADE,
     contact_type VARCHAR(50) NOT NULL,  -- 'billing', 'operations', 'security'
     full_name VARCHAR(255),
     title VARCHAR(255),
@@ -54,7 +56,7 @@ CREATE TABLE alternate_contacts (
 -- Create the services table
 CREATE TABLE services (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     service VARCHAR(255) NOT NULL,
     date_from DATE NOT NULL,
     date_to DATE NOT NULL,
@@ -77,7 +79,7 @@ CREATE TYPE period_granularity_type AS ENUM ('MONTHLY', 'WEEKLY', 'DAILY');
 -- Create the main cost reports table
 CREATE TABLE cost_reports (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     current_period_cost NUMERIC(20,10) NOT NULL,
     previous_period_cost NUMERIC(20,10) NOT NULL,
     cost_difference NUMERIC(20,10) NOT NULL,
@@ -120,7 +122,7 @@ CREATE TABLE cost_forecasts (
 
 CREATE TABLE security (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     service VARCHAR(255) NOT NULL,
     total_findings INTEGER NOT NULL DEFAULT 0,
     critical_count INTEGER NOT NULL DEFAULT 0,
@@ -177,8 +179,8 @@ CREATE TABLE products (
 -- Create the product_accounts junction table
 CREATE TABLE product_accounts (
     id SERIAL PRIMARY KEY,
-    product_id INTEGER NOT NULL REFERENCES products(id),
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(product_id, account_id)
@@ -188,7 +190,7 @@ CREATE TABLE product_accounts (
 -- Create the logs table
 CREATE TABLE logs (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     date_created TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     account_status VARCHAR(50) DEFAULT 'Pass',
     cost_status VARCHAR(50) DEFAULT 'Pass',
@@ -219,7 +221,7 @@ CREATE TABLE log_messages (
 -- Config compliance reports
 CREATE TABLE config_reports (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     date_from DATE NOT NULL,
     date_to DATE NOT NULL,
     compliance_score NUMERIC(5,2),
@@ -240,24 +242,123 @@ CREATE TABLE non_compliant_resources (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Service resources with configuration
+-- Create new service_resources table
 CREATE TABLE service_resources (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     service_name VARCHAR(255) NOT NULL,
     resource_type VARCHAR(255),
     resource_id VARCHAR(255),
+    resource_name VARCHAR(255),
     region VARCHAR(50),
     availability_zone VARCHAR(50),
-    configuration JSONB,
-    tags JSONB,
+    state VARCHAR(50),
+    instance_type VARCHAR(50),
+    vpc_id VARCHAR(255),
+    engine VARCHAR(100),
+    instance_class VARCHAR(100),
+    multi_az BOOLEAN,
+    size_gb INTEGER,
+    volume_type VARCHAR(50),
+    creation_date TIMESTAMP WITH TIME ZONE,
+    type VARCHAR(100),
+    scheme VARCHAR(50),
+    instance_count INTEGER,
+    min_size INTEGER,
+    max_size INTEGER,
+    available_ip_count INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Create indexes
+CREATE INDEX idx_service_resources_account_id ON service_resources(account_id);
+CREATE INDEX idx_service_resources_service_name ON service_resources(service_name);
+CREATE INDEX idx_service_resources_resource_type ON service_resources(resource_type);
+CREATE INDEX idx_service_resources_region ON service_resources(region);
+CREATE INDEX idx_service_resources_availability_zone ON service_resources(availability_zone);
+CREATE INDEX idx_service_resources_state ON service_resources(state);
+
+
+
+-- Compute Optimizer 
+CREATE TABLE compute_optimizer (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    resource_type VARCHAR(50) NOT NULL,
+    resource_arn VARCHAR(255) NOT NULL,
+    resource_name VARCHAR(255),
+    finding VARCHAR(50),
+    current_instance_type VARCHAR(50),
+    current_memory_size INTEGER,
+    current_volume_type VARCHAR(50),
+    current_volume_size INTEGER,
+    recommended_instance_type VARCHAR(50),
+    recommended_memory_size INTEGER,
+    recommended_volume_type VARCHAR(50),
+    recommended_volume_size INTEGER,
+    savings_opportunity_percentage DECIMAL(5,2),
+    estimated_monthly_savings_usd DECIMAL(10,2),
+    performance_risk DECIMAL(3,2),
+    cpu_utilization_max DECIMAL(5,2),
+    memory_utilization_avg DECIMAL(5,2),
+    migration_effort VARCHAR(50),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_compute_optimizer_account_id ON compute_optimizer(account_id);
+CREATE INDEX idx_compute_optimizer_resource_type ON compute_optimizer(resource_type);
+CREATE INDEX idx_compute_optimizer_finding ON compute_optimizer(finding);
+CREATE INDEX idx_compute_optimizer_savings ON compute_optimizer(estimated_monthly_savings_usd);
+CREATE INDEX idx_compute_optimizer_performance_risk ON compute_optimizer(performance_risk);
+
+
+-- Create config_inventory table
+CREATE TABLE config_inventory (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    resource_type VARCHAR(255) NOT NULL,
+    resource_subtype VARCHAR(255),
+    resource_id VARCHAR(255) NOT NULL,
+    resource_name VARCHAR(255),
+    region VARCHAR(50),
+    availability_zone VARCHAR(50),
+    state VARCHAR(50),
+    instance_type VARCHAR(50),
+    instance_class VARCHAR(100),
+    engine VARCHAR(100),
+    vpc_id VARCHAR(255),
+    size_gb INTEGER,
+    volume_type VARCHAR(50),
+    creation_date TIMESTAMP WITH TIME ZONE,
+    multi_az BOOLEAN,
+    scheme VARCHAR(50),
+    type VARCHAR(100),
+    instance_count INTEGER,
+    min_size INTEGER,
+    max_size INTEGER,
+    available_ip_count INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_config_inventory_account_id ON config_inventory(account_id);
+CREATE INDEX idx_config_inventory_resource_type ON config_inventory(resource_type);
+CREATE INDEX idx_config_inventory_resource_subtype ON config_inventory(resource_subtype);
+CREATE INDEX idx_config_inventory_resource_id ON config_inventory(resource_id);
+CREATE INDEX idx_config_inventory_region ON config_inventory(region);
+CREATE INDEX idx_config_inventory_availability_zone ON config_inventory(availability_zone);
+CREATE INDEX idx_config_inventory_state ON config_inventory(state);
+CREATE INDEX idx_config_inventory_vpc_id ON config_inventory(vpc_id);
+CREATE INDEX idx_config_inventory_creation_date ON config_inventory(creation_date);
+-- Create unique constraint for account + resource_id
+CREATE UNIQUE INDEX idx_config_inventory_unique_resource ON config_inventory(account_id, resource_id);
 
 -- Security services
 CREATE TABLE guard_duty_findings (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     detector_id VARCHAR(255),
     finding_type VARCHAR(255),
     severity NUMERIC(3,1),
@@ -272,7 +373,7 @@ CREATE TABLE guard_duty_findings (
 
 CREATE TABLE kms_keys (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     key_id VARCHAR(255),
     arn VARCHAR(255),
     description TEXT,
@@ -286,7 +387,7 @@ CREATE TABLE kms_keys (
 
 CREATE TABLE waf_rules (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     name VARCHAR(255),
     waf_id VARCHAR(255),
     arn VARCHAR(255),
@@ -303,7 +404,7 @@ CREATE TABLE waf_rules (
 -- WAF Rules detailed table
 CREATE TABLE waf_rules_detailed (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     web_acl_name VARCHAR(255) NOT NULL,
     rule_name VARCHAR(255) NOT NULL,
     priority INTEGER NOT NULL,
@@ -328,7 +429,7 @@ CREATE TABLE waf_rules_detailed (
 
 CREATE TABLE cloudtrail_logs (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     name VARCHAR(255),
     arn VARCHAR(255),
     is_logging BOOLEAN DEFAULT FALSE,
@@ -343,7 +444,7 @@ CREATE TABLE cloudtrail_logs (
 
 CREATE TABLE secrets_manager_secrets (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     name VARCHAR(255),
     arn VARCHAR(255),
     description TEXT,
@@ -356,7 +457,7 @@ CREATE TABLE secrets_manager_secrets (
 
 CREATE TABLE certificates (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     arn VARCHAR(255),
     domain_name VARCHAR(255),
     status VARCHAR(50),
@@ -368,7 +469,7 @@ CREATE TABLE certificates (
 
 CREATE TABLE inspector_findings (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     finding_arn VARCHAR(255),
     severity VARCHAR(50),
     status VARCHAR(50),
@@ -383,7 +484,7 @@ CREATE TABLE inspector_findings (
 -- Inventory tables
 CREATE TABLE inventory_instances (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     instance_id VARCHAR(255),
     instance_type VARCHAR(50),
     platform VARCHAR(50),
@@ -398,8 +499,8 @@ CREATE TABLE inventory_instances (
 
 CREATE TABLE inventory_applications (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
-    instance_id INTEGER REFERENCES inventory_instances(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    instance_id INTEGER REFERENCES inventory_instances(id) ON DELETE CASCADE,
     name VARCHAR(255),
     version VARCHAR(100),
     publisher VARCHAR(255),
@@ -409,8 +510,8 @@ CREATE TABLE inventory_applications (
 
 CREATE TABLE inventory_patches (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
-    instance_id INTEGER REFERENCES inventory_instances(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    instance_id INTEGER REFERENCES inventory_instances(id) ON DELETE CASCADE,
     title VARCHAR(255),
     classification VARCHAR(100),
     severity VARCHAR(50),
@@ -422,7 +523,7 @@ CREATE TABLE inventory_patches (
 -- Marketplace usage
 CREATE TABLE marketplace_usage (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     product_code VARCHAR(255),
     product_name VARCHAR(255),
     cost_consumed NUMERIC(20,10),
@@ -437,7 +538,7 @@ CREATE TABLE marketplace_usage (
 -- Trusted Advisor checks
 CREATE TABLE trusted_advisor_checks (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     check_name VARCHAR(255),
     category VARCHAR(100),
     severity VARCHAR(50),
@@ -452,7 +553,7 @@ CREATE TABLE trusted_advisor_checks (
 -- Health events
 CREATE TABLE health_events (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     arn VARCHAR(255),
     service VARCHAR(100),
     event_type_code VARCHAR(255),
@@ -467,7 +568,7 @@ CREATE TABLE health_events (
 -- Application signals
 CREATE TABLE application_signals (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     service_name VARCHAR(255),
     namespace VARCHAR(255),
     key_attributes JSONB,
@@ -478,7 +579,7 @@ CREATE TABLE application_signals (
 -- Resilience Hub assessments
 CREATE TABLE resilience_hub_apps (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     app_arn VARCHAR(255),
     name VARCHAR(255),
     compliance_status VARCHAR(50),
@@ -494,6 +595,8 @@ CREATE TABLE resilience_hub_apps (
     last_drill TIMESTAMP WITH TIME ZONE,
     UNIQUE (app_arn)
 );
+
+
 
 /* Set Indexes */
 
@@ -542,7 +645,7 @@ CREATE INDEX idx_waf_rules_detailed_compliance ON waf_rules_detailed(is_complian
 CREATE INDEX idx_waf_rules_detailed_managed ON waf_rules_detailed(is_managed_rule);
 
 CREATE INDEX idx_config_reports_account_id ON config_reports(account_id);
-CREATE INDEX idx_service_resources_account_id ON service_resources(account_id);
+
 CREATE INDEX idx_guard_duty_findings_account_id ON guard_duty_findings(account_id);
 CREATE INDEX idx_inventory_instances_account_id ON inventory_instances(account_id);
 CREATE INDEX idx_marketplace_usage_account_id ON marketplace_usage(account_id);
