@@ -11,6 +11,16 @@ Parameters:
     Type: CommaDelimitedList
     Description: List of AWS account IDs that can send data (comma-separated)
     Default: "123456789012"
+  
+  CustomerName:
+    Type: String
+    Default: "None"
+    Description: Customer name for the account
+    
+  PartnerName:
+    Type: String
+    Default: "None"
+    Description: Partner name for the account
 
 Resources:
   # KMS Key for encryption
@@ -577,6 +587,48 @@ Resources:
             Effect: Allow
             Action:
               - ec2:DescribeRegions
+              - ec2:DescribeInstances
+              - ec2:DescribeVolumes
+              - ec2:DescribeSubnets
+            Resource: "*"
+          - Sid: EC2ServiceResourcesAccess
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeVolumes
+              - ec2:DescribeSubnets
+            Resource: "*"
+          - Sid: RDSAccess
+            Effect: Allow
+            Action:
+              - rds:DescribeDBInstances
+            Resource: "*"
+          - Sid: S3Access
+            Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+            Resource: "*"
+          - Sid: ELBAccess
+            Effect: Allow
+            Action:
+              - elasticloadbalancing:DescribeLoadBalancers
+            Resource: "*"
+          - Sid: AutoScalingAccess
+            Effect: Allow
+            Action:
+              - autoscaling:DescribeAutoScalingGroups
+            Resource: "*"
+          - Sid: LambdaAccess
+            Effect: Allow
+            Action:
+              - lambda:ListFunctions
+            Resource: "*"
+          - Sid: ComputeOptimizerAccess
+            Effect: Allow
+            Action:
+              - compute-optimizer:GetEC2InstanceRecommendations
+              - compute-optimizer:GetEBSVolumeRecommendations
+              - compute-optimizer:GetLambdaFunctionRecommendations
             Resource: "*"
           - Sid: LogsAccess
             Effect: Allow
@@ -756,6 +808,8 @@ Resources:
           REGION: !Ref AWS::Region
           BUCKET: !Ref S3Bucket
           ANALYTICS_KMS_KEY: !GetAtt A360KMSKey.Arn
+          CUSTOMER: !Ref CustomerName
+          PARTNER: !Ref PartnerName
       KmsKeyArn: !GetAtt A360KMSKey.Arn
       Code:
         ZipFile: |
