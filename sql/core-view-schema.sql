@@ -334,7 +334,7 @@ SELECT
     p.name as project_product_name
 FROM
     compute_optimizer co
-    LEFT JOIN accounts a ON co.account_id = a.account_id
+    LEFT JOIN accounts a ON co.account_id = a.id
     LEFT JOIN (
         SELECT DISTINCT ON (account_id) account_id, product_id
         FROM product_accounts
@@ -951,30 +951,7 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Compute Optimizer View
-CREATE OR REPLACE VIEW view_compute_optimizer_summary AS
-SELECT 
-    a.account_id as account,
-    a.account_name,
-    CONCAT(a.account_id, '-', a.account_name) as account_full,
-    p.name as project_product_name,
-    cor.resource_type,
-    cor.finding,
-    COUNT(*) as resource_count,
-    SUM(cor.estimated_monthly_savings_usd) as total_monthly_savings,
-    AVG(cor.savings_opportunity_percentage) as avg_savings_percentage,
-    AVG(cor.performance_risk) as avg_performance_risk,
-    COUNT(CASE WHEN cor.finding = 'NotOptimized' THEN 1 END) as not_optimized_count,
-    COUNT(CASE WHEN cor.estimated_monthly_savings_usd > 0 THEN 1 END) as savings_opportunities
-FROM compute_optimizer_recommendations cor
-LEFT JOIN accounts a ON cor.account_id = a.account_id
-LEFT JOIN (
-    SELECT DISTINCT ON (account_id) account_id, product_id
-    FROM product_accounts
-    ORDER BY account_id, id
-) pa ON a.id = pa.account_id
-LEFT JOIN products p ON pa.product_id = p.id
-GROUP BY a.account_id, a.account_name, p.name, cor.resource_type, cor.finding;
+
 
 
 -- Create main view

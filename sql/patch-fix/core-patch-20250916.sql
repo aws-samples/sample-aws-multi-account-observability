@@ -185,7 +185,7 @@ DROP TABLE IF EXISTS compute_optimizer CASCADE;
 -- Create new compute_optimizer table
 CREATE TABLE compute_optimizer (
     id SERIAL PRIMARY KEY,
-    account_id VARCHAR(12) NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     resource_type VARCHAR(50) NOT NULL,
     resource_arn VARCHAR(255) NOT NULL,
     resource_name VARCHAR(255),
