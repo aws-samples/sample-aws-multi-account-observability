@@ -1,9 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
-""" 
-from dotenv import load_dotenv, dotenv_values
-load_dotenv() 
-"""
-
+""" from dotenv import load_dotenv, dotenv_values
+load_dotenv()
+ """
 """ IMPORTS """
 import sys
 import boto3
@@ -764,13 +762,13 @@ class AWSResourceManager:
             patch_response = AWSResponse(ssm.describe_instance_patches(
                 InstanceId=instance_id
             ))
-            
+                        
             for patch in patch_response.data.get('Patches', []):
                 patches.append({
                     'instance_id': instance_id,
                     'title': patch.get('Title'),
-                    'classification': patch.get('Classification'),
-                    'severity': patch.get('Severity'),
+                    'classification': patch.get('Classification') or "Normal",
+                    'severity': patch.get('Severity') or "None",
                     'state': patch.get('State'),
                     'installed_time': patch.get('InstalledTime')
                 })
@@ -796,19 +794,24 @@ class AWSResourceManager:
             }
             
             instances = AWSResponse(ssm.describe_instance_information())
+            # Write to JSON file
             
+
             for instance in instances.data.get('InstanceInformationList', []):
                 instance_id = instance['InstanceId']
                 
                 # Add instance info
                 security_inventory['instances'].append({
-                    'instance_id': instance_id,
-                    'platform': instance.get('PlatformName'),
-                    'platform_version': instance.get('PlatformVersion'),
-                    'agent_version': instance.get('AgentVersion'),
-                    'last_ping': instance.get('LastPingDateTime'),
-                    'computer_name': instance.get('ComputerName'),
-                    'instance_type': instance.get('InstanceType')
+                    'instance_id'           : instance_id,
+                    'platform'              : instance.get('PlatformName'),
+                    'platform_version'      : instance.get('PlatformVersion'),
+                    'agent_version'         : instance.get('AgentVersion'),
+                    'last_ping'             : instance.get('LastPingDateTime'),
+                    'computer_name'         : instance.get('ComputerName'),
+                    'instance_type'         : instance.get('ResourceType'),
+                    'ip_address'            : instance.get('IPAddress'),
+                    'ping_status'           : instance.get('PingStatus'),
+                    'last_ping_date_time'   : instance.get('LastPingDateTime')
                 })
                 
                 # Get security-relevant inventory types (only supported ones)
@@ -820,7 +823,7 @@ class AWSResourceManager:
                             Filters=[{'Key': 'AWS:InstanceInformation.InstanceId', 'Values': [instance_id]}],
                             ResultAttributes=[{'TypeName': inv_type}]
                         ))
-                        
+                                                
                         for entity in resp.data.get('Entities', []):
                             for data_item in entity.get('Data', {}).values():
                                 for item in data_item.get('Content', []):
@@ -2476,8 +2479,8 @@ if __name__ == "__main__":
     1. Run Historical Data Sets 
     - This will allow you to run data for a given period of time.
     """
-    start   = "5-9-2025"    # September 5 2025
-    end     = "10-9-2025"   # September 10 2025
+    start   = "1-1-2025"    # September 5 2025
+    end     = "17-9-2025"   # September 10 2025
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     
     """ 2. Run Daily Data Sets """

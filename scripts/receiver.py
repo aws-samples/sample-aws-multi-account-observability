@@ -1,9 +1,6 @@
 """ ONLY FOR DEVELOPMENT REMOVE ON LAMBDA """
-""" 
-from dotenv import load_dotenv, dotenv_values 
-load_dotenv() 
-
-"""
+""" from dotenv import load_dotenv, dotenv_values 
+load_dotenv() """
 """ IMPORTS """
 import boto3
 import sys
@@ -523,7 +520,7 @@ class CoreManager:
                     if k not in ['contact_info', 'alternate_contacts']:
                         account_data[k]                 = v if v is not None else self._get_default_account(k, data.get('account_id'))
                         account_data["csp"]             = self._get_default_account("csp", "AWS")
-                        account_data["account_type"]    = self._get_default_account("account_type", "PRODUCTION")
+                        #account_data["account_type"]    = self._get_default_account("account_type", "PRODUCTION")
                 
                 # Handle partner_name and customer_name specifically
                 account_data["partner_name"] = data.get('partner_name', 'None')
@@ -948,8 +945,8 @@ class CoreManager:
                 
                 for patch in data['patches']:
                     filtered_patch = {k: v for k, v in patch.items() if k in patch_fields}
-                    filtered_patch['instance_id'] = first_instance_db_id
-                    filtered_patch['account_id'] = self.curr_acct['id']  # Add account_id
+                    filtered_patch['instance_id']   = first_instance_db_id
+                    filtered_patch['account_id']    = self.curr_acct['id']  # Add account_id
                     
                     self.db.upsert('inventory_patches', filtered_patch, ['instance_id', 'title'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.INVENTORY, msg="Inventory Patches Loaded")
@@ -1358,7 +1355,7 @@ def load_data():
 def testing():
     core_db = CoreManager()
     try:
-        with open('data/2025-09-15_DAILY.json', 'r', encoding='utf-8') as f:
+        with open('data/2025-09-18_DAILY.json', 'r', encoding='utf-8') as f:
             file_content = f.read()
         print(f"*File Read")    
         data = json.loads(file_content)
@@ -1386,7 +1383,7 @@ def lambda_handler(event=None, context=None):
             return True
         
         status  = process_data_status(data)
-
+        
         #testing()
         print(f"{INFO} Finished Loading")
         print("*"*15,"Summary","*"*15) 

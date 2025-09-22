@@ -12,6 +12,7 @@ CREATE TABLE accounts (
     joined_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     account_type VARCHAR(50),
     csp VARCHAR(50),
+    category TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

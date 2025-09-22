@@ -1,5 +1,4 @@
 
-
 -- Updating Tables to delete on cascade
 ALTER TABLE contact_info DROP CONSTRAINT contact_info_account_id_fkey;
 ALTER TABLE contact_info ADD CONSTRAINT contact_info_account_id_fkey 
@@ -98,10 +97,11 @@ ALTER TABLE resilience_hub_apps ADD CONSTRAINT resilience_hub_apps_account_id_fk
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE;
 
 
--- Ater account table to add partner and customer name
+-- Alter account table to add partner and customer name
 ALTER TABLE accounts 
 ADD COLUMN partner_name TEXT DEFAULT 'None',
-ADD COLUMN customer_name TEXT DEFAULT 'None';
+ADD COLUMN customer_name TEXT DEFAULT 'None',
+ADD COLUMN category TEXT DEFAULT 'Internet';
 
 
 -- Create new service_resources table
