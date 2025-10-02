@@ -8,6 +8,7 @@ CREATE OR REPLACE VIEW view_accounts AS
 SELECT
     a.*,
     a.account_id as account,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -25,6 +26,8 @@ SELECT
     ci.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -43,6 +46,8 @@ SELECT
     ac.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -61,6 +66,8 @@ SELECT
     s.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -79,6 +86,8 @@ SELECT
     cr.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     cr.period_start as date_from,
@@ -99,6 +108,8 @@ SELECT
     sc.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     cr.period_start as date_from,
@@ -120,6 +131,8 @@ SELECT
     cf.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     cr.period_start as date_from,
@@ -141,6 +154,8 @@ SELECT
     s.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -159,6 +174,8 @@ SELECT
     f.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -189,6 +206,8 @@ SELECT
     pa.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -202,6 +221,8 @@ SELECT
     p.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     pr.name as project_product_name
 FROM
@@ -221,6 +242,8 @@ SELECT
     l.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -239,6 +262,8 @@ SELECT
     lm.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -258,6 +283,8 @@ SELECT
     cr.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -295,6 +322,8 @@ SELECT
     sr.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -310,9 +339,11 @@ FROM
 
 -- Create summary view
 CREATE OR REPLACE VIEW view_service_resources_summary AS
-SELECT 
+SELECT
     a.account_id,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     sr.service_name,
     sr.resource_type,
     sr.region,
@@ -322,7 +353,7 @@ SELECT
     COUNT(CASE WHEN sr.state IN ('stopped', 'Inactive') THEN 1 END) as inactive_resources
 FROM service_resources sr
 LEFT JOIN accounts a ON sr.account_id = a.id
-GROUP BY a.account_id, a.account_name, sr.service_name, sr.resource_type, sr.region, sr.availability_zone;
+GROUP BY a.account_id, a.account_name, a.account_type, a.category, sr.service_name, sr.resource_type, sr.region, sr.availability_zone;
 
 -- Compute optimizers view
 CREATE OR REPLACE VIEW view_compute_optimizer AS
@@ -330,6 +361,8 @@ SELECT
     co.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -349,6 +382,8 @@ SELECT
     gdf.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -367,6 +402,8 @@ SELECT
     kk.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -385,6 +422,8 @@ SELECT
     wr.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -403,6 +442,8 @@ SELECT
     wrd.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -421,6 +462,8 @@ SELECT
     ctl.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -439,6 +482,8 @@ SELECT
     sms.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -493,6 +538,8 @@ SELECT
     ii.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -511,6 +558,8 @@ SELECT
     ia.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -530,6 +579,8 @@ SELECT
     ip.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     ii.instance_id as instance_name,
@@ -545,12 +596,16 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
+
+
 -- Marketplace usage view
 CREATE OR REPLACE VIEW view_marketplace_usage AS
 SELECT
     mu.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -569,6 +624,8 @@ SELECT
     tac.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -587,6 +644,8 @@ SELECT
     he.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -605,6 +664,8 @@ SELECT
     as_.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -623,6 +684,8 @@ SELECT
     rha.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -642,9 +705,10 @@ SELECT
     a.id as account_id,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     a.csp as account_csp,
-    a.account_type as account_type,
     a.account_status,
 
     -- Product Count
@@ -737,6 +801,7 @@ CREATE OR REPLACE VIEW view_acct_summary AS
 SELECT
     a.*,
     a.account_id as account,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     -- Cost metrics
@@ -780,8 +845,8 @@ FROM
         LIMIT 1
     ) s ON s.account_id = a.id
     LEFT JOIN (
-        SELECT 
-            account_id, 
+        SELECT
+            account_id,
             COUNT(*) as instance_count,
             COUNT(CASE WHEN ping_status = 'Online' THEN 1 END) as running_instances
         FROM inventory_instances
@@ -891,6 +956,8 @@ CREATE OR REPLACE VIEW view_acct_security_findings_summary AS
 SELECT
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     s.service,
@@ -939,28 +1006,30 @@ FROM
 
 -- Compute Optimizer View
 CREATE OR REPLACE VIEW view_compute_optimizer_summary AS
-SELECT 
+SELECT
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
-    cor.resource_type,
-    cor.finding,
+    co.resource_type,
+    co.finding,
     COUNT(*) as resource_count,
-    SUM(cor.estimated_monthly_savings_usd) as total_monthly_savings,
-    AVG(cor.savings_opportunity_percentage) as avg_savings_percentage,
-    AVG(cor.performance_risk) as avg_performance_risk,
-    COUNT(CASE WHEN cor.finding = 'NotOptimized' THEN 1 END) as not_optimized_count,
-    COUNT(CASE WHEN cor.estimated_monthly_savings_usd > 0 THEN 1 END) as savings_opportunities
-FROM compute_optimizer_recommendations cor
-LEFT JOIN accounts a ON cor.account_id = a.account_id
+    SUM(co.estimated_monthly_savings_usd) as total_monthly_savings,
+    AVG(co.savings_opportunity_percentage) as avg_savings_percentage,
+    AVG(co.performance_risk) as avg_performance_risk,
+    COUNT(CASE WHEN co.finding = 'NotOptimized' THEN 1 END) as not_optimized_count,
+    COUNT(CASE WHEN co.estimated_monthly_savings_usd > 0 THEN 1 END) as savings_opportunities
+FROM compute_optimizer co
+LEFT JOIN accounts a ON co.account_id = a.id
 LEFT JOIN (
     SELECT DISTINCT ON (account_id) account_id, product_id
     FROM product_accounts
     ORDER BY account_id, id
 ) pa ON a.id = pa.account_id
 LEFT JOIN products p ON pa.product_id = p.id
-GROUP BY a.account_id, a.account_name, p.name, cor.resource_type, cor.finding;
+GROUP BY a.account_id, a.account_name, a.account_type, a.category, p.name, co.resource_type, co.finding;
 
 -- Create main view
 CREATE OR REPLACE VIEW view_config_inventory AS
