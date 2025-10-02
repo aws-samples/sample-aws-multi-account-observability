@@ -303,6 +303,8 @@ SELECT
     ncr.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -502,6 +504,8 @@ SELECT
     c.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -520,6 +524,8 @@ SELECT
     if.*,
     a.account_id as account,
     a.account_name,
+    a.account_type,
+    a.category as account_category,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -802,6 +808,7 @@ SELECT
     a.*,
     a.account_id as account,
     a.category as account_category,
+    
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     -- Cost metrics
