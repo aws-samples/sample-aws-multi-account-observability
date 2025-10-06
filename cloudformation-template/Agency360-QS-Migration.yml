@@ -1,0 +1,871 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'QuickSight Aurora Analysis Migration Lambda Function'
+
+Parameters:
+  Region:
+    Type: String
+    Default: ap-southeast-1
+    Description: AWS Region
+  
+  AuroraClusterArn:
+    Type: String
+    Description: Aurora Cluster ARN
+  
+  AuroraSecretArn:
+    Type: String
+    Description: Aurora Secret Manager ARN
+  
+  S3Bucket:
+    Type: String
+    Description: S3 Bucket for QuickSight assets
+  
+  S3Uri:
+    Type: String
+    Description: S3 URI of the QuickSight analysis file
+    Default: ""
+  
+  NewAnalysisName:
+    Type: String
+    Description: Name for the new analysis
+    Default: ""
+  
+  KMSKeyArn:
+    Type: String
+    Description: KMS Key ARN for encryption
+    Default: ""
+
+Resources:
+  # W28: Explicit naming required for cross-stack references
+  QSMigrationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-qs-migration-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: QSMigrationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # W11: Wildcard required for QuickSight cross-account operations
+              - Effect: Allow
+                Action:
+                  - quicksight:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${S3Bucket}"
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds-data:*
+                Resource: !Ref AuroraClusterArn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref AuroraSecretArn
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref KMSKeyArn
+                Condition:
+                  StringEquals:
+                    "kms:ViaService": !Sub "s3.${AWS::Region}.amazonaws.com"
+
+  # W84: KMS encryption optional for non-sensitive log data
+  # W89: VPC not required - function accesses public AWS APIs only
+  QSMigrationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-qs-migration"
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt QSMigrationLambdaRole.Arn
+      Timeout: 900
+      MemorySize: 512
+      Environment:
+        Variables:
+          REGION: !Ref Region
+          AURORA_CLUSTER_ARN: !Ref AuroraClusterArn
+          AURORA_SECRET_ARN: !Ref AuroraSecretArn
+          BUCKET: !Ref S3Bucket
+          KMS_KEY: !Ref KMSKeyArn
+          S3_URI: !Ref S3Uri
+          NEW_ANALYSIS_NAME: !Ref NewAnalysisName
+      Code:
+        ZipFile: |
+            import boto3
+            import json
+            import uuid
+            import os
+            import gzip
+            import zipfile
+            import io
+            import tempfile
+            from typing import Dict, List, Optional
+
+
+            """ GLOBAL VARIABLES """
+            START       = "🔵"      # Blue dot
+            SUCCESS     = "🟢"      # Green dot
+            WARN        = "🟡"      # Yellow dot
+            ERROR       = "🔴"      # Warning sign
+            INFO        = "⚙️ "     # Info Sign
+            DELETED     = "🗑️ "     # Deleted
+            USER        = "🧑‍💼 "     # User icon
+
+            class QSMigrator:
+                def __init__(self):
+                    self.account_id = boto3.client('sts').get_caller_identity()['Account']
+                    self.region     = os.environ['REGION']
+                    self.qs         = boto3.client('quicksight', region_name=self.region)
+                    self.s3         = boto3.client('s3', region_name=self.region)
+                    self.rds        = boto3.client('rds-data', region_name=self.region)
+                    self.rds_client = boto3.client('rds', region_name=self.region)
+                    
+                    # Environment variables
+                    self.cluster_arn    = os.environ['AURORA_CLUSTER_ARN']
+                    self.secret_arn     = os.environ['AURORA_SECRET_ARN']
+                    self.bucket         = os.environ['BUCKET']
+                    self.s3_uri         = os.environ['S3_URI']
+                    self.kms_key        = os.environ.get('KMS_KEY')
+                    self.analysis_name  = os.environ.get('NEW_ANALYSIS_NAME') or f"NEW-{str(uuid.uuid4())}"
+                
+                def print_table(self, data, columns):
+                    if not data:
+                        print("No data found")
+                        return
+                    
+                    # Calculate column widths
+                    widths = {}
+                    for col in columns:
+                        widths[col] = max(len(col), max(len(str(item.get(col, ""))) for item in data)) + 2
+                    
+                    # Calculate total width
+                    total_width = sum(widths.values()) + len(columns) - 1
+                    
+                    # Print header
+                    print('-' * total_width)
+                    header = " | ".join(f"{col:<{widths[col]}}" for col in columns)
+                    print(header)
+                    print('-' * total_width)
+                    
+                    # Print rows
+                    for item in data:
+                        row = " | ".join(f"{str(item.get(col, '')):<{widths[col]}}" for col in columns)
+                        print(row)
+                    
+                    print('-' * total_width)
+                    print(f"Total: {len(data)} items")
+
+                def get_qs_admin_group(self):
+                    """Check for a360-qs-admin group, create if not exists, add admin users"""
+                    try:
+                        group_name  = "a360-qs-admin"
+                        group_arn   = None
+                        user_arr    = []
+                        user_dict   = {"Username":None, "Role":None, "Group":None, "GroupARN": None}
+                        
+                        # Check if group exists
+                        try:
+                            group_response = self.qs.describe_group(
+                                AwsAccountId    = self.account_id,
+                                Namespace       = 'default',
+                                GroupName       = group_name
+                            )
+                            group_arn = group_response['Group']['Arn']
+                            print(f"{SUCCESS} Group Exists: {group_name}")
+                        except:
+                            # Create group if it doesn't exist
+                            group_response = self.qs.create_group(
+                                AwsAccountId    = self.account_id,
+                                Namespace       = 'default',
+                                GroupName       = group_name,
+                                Description     = 'Admin group for QuickSight administrators'
+                            )
+                            group_arn = group_response['Group']['Arn']
+                            print(f"{SUCCESS} Created New Group: {group_name}")
+                        
+                        # Get all users
+                        users_response = self.qs.list_users(
+                            AwsAccountId=self.account_id,
+                            Namespace='default'
+                        )
+                        
+                        admin_count = 0
+                        # Add only admin and admin pro users to group
+                        for user in users_response['UserList']:
+                            if user['Role'] in ['ADMIN', 'ADMIN_PRO']:
+                                try:
+                                    self.qs.create_group_membership(
+                                        AwsAccountId=self.account_id,
+                                        Namespace='default',
+                                        GroupName=group_name,
+                                        MemberName=user['UserName']
+                                    )
+                                    admin_count += 1
+                                    user_dict = {
+                                        "Username"  : user['UserName'],
+                                        "Role"      : user['Role'],
+                                        "Group"     : group_name,
+                                        "GroupARN"  : group_arn
+                                    }
+                                    user_arr.append(user_dict)
+                                    #print(f"Added {user['Role']} user {user['UserName']} to group")
+                                except Exception as e:
+                                    # User might already be in group
+                                    print(f"Failed to add user {user['UserName']} to group: {e}")
+                        
+                        self.print_table(user_arr, ["Username", "Role", "Group", "GroupARN"])
+                        return group_arn
+                        
+                    except Exception as e:
+                        print(f"Error with admin group: {str(e)}")
+                        return None
+                
+                def get_cluster_datasources(self):
+                    """Get cluster endpoints and find matching QuickSight datasources"""
+                    cluster_arn = self.cluster_arn
+                    try:
+                        # Extract cluster identifier from ARN
+                        cluster_id = cluster_arn.split(':')[-1]
+                        
+                        # Get cluster endpoints
+                        cluster_response = self.rds_client.describe_db_clusters(
+                            DBClusterIdentifier=cluster_id
+                        )
+                        cluster = cluster_response['DBClusters'][0]
+                        
+                        endpoints = {
+                            'writer': cluster['Endpoint'],
+                            'reader': cluster.get('ReaderEndpoint')
+                        }
+                        
+                        # Get all QuickSight datasources
+                        datasources_response = self.qs.list_data_sources(
+                            AwsAccountId=self.account_id
+                        )
+                        
+                        matching_datasources    = []
+                        avail_datasources       = []
+
+                        for ds in datasources_response['DataSources']:
+                            ds_detail = self.qs.describe_data_source(
+                                AwsAccountId=self.account_id,
+                                DataSourceId=ds['DataSourceId']
+                            )
+                            
+                            # Check if datasource uses any of the cluster endpoints and is not deleted
+                            ds_config = ds_detail['DataSource']
+                            if ('DataSourceParameters' in ds_config and ds_config.get('Status') != 'DELETED'):
+                                params = ds_config['DataSourceParameters']
+                                if 'AuroraPostgreSqlParameters' in params:
+                                    host = params['AuroraPostgreSqlParameters']['Host']
+                                    if host in [endpoints['writer'], endpoints['reader']]:
+
+                                        matching_datasources.append({
+                                            'DataSourceId'        : ds['DataSourceId'],
+                                            'Arn'       : ds['Arn'],
+                                            'Name'      : ds['Name'],
+                                            "Type"      : ds_config['Type'],
+                                            'Endpoint'  : host,
+                                            'Status'    : ds_config.get('Status'),
+                                            'config'    : ds_config
+                                        })
+                        
+
+                    
+
+                        self.print_table(matching_datasources, ["DataSourceId", "Arn", "Name", "Type", "Endpoint", "Status"])
+                        return matching_datasources
+                        
+                    except Exception as e:
+                        return {'error': str(e)}
+
+                def set_datasource_to_secrets_manager(self, datasource_arn):
+                    """Migrate datasource to use Secrets Manager authentication"""
+                    try:
+                        # Get matching datasource config from cluster datasources
+                        cluster_datasources = self.get_cluster_datasources()
+                        
+                        # Find the matching datasource
+                        matching_ds = None
+                        for ds in cluster_datasources:
+                            if ds['Arn'] == datasource_arn:
+                                matching_ds = ds
+                                break
+                        
+                        if not matching_ds:
+                            print(f"{ERROR} Datasource not found in cluster datasources")
+                            return False
+                        
+                        datasource_id   = matching_ds['DataSourceId']
+                        ds_config       = matching_ds['config']
+                        
+                        # Preserve all existing parameters including VPC settings
+                        existing_params = ds_config['DataSourceParameters']
+                        
+                        # Update datasource with Secrets Manager, keeping all existing config
+                        self.qs.update_data_source(
+                            AwsAccountId            = self.account_id,
+                            DataSourceId            = datasource_id,
+                            Name                    = ds_config['Name'],
+                            DataSourceParameters    = existing_params,
+                            Credentials             = {
+                                                        'SecretArn': self.secret_arn
+                                                        },
+                            VpcConnectionProperties = ds_config.get('VpcConnectionProperties', {})
+                        )
+                        
+                        print(f"{SUCCESS} Migrated datasource {ds_config['Name']} to Secrets Manager")
+                        return True
+                        
+                    except Exception as e:
+                        print(f"{ERROR} Failed to migrate datasource: {str(e)}")
+                        return False
+
+                def get_current_user_arn(self):
+                    """Get current user ARN"""
+                    try:
+                        identity = boto3.client('sts').get_caller_identity()
+                        user_arn = identity['Arn']
+                        username = user_arn.split('/')[-1]
+                        
+                        response = self.qs.list_users(
+                            AwsAccountId=self.account_id, 
+                            Namespace='default'
+                        )
+                        
+                        for user in response['UserList']:
+                            if username in user['UserName']:
+                                return user['Arn']
+                        
+                        if response['UserList']:
+                            return response['UserList'][0]['Arn']
+                        
+                        return None
+                    except Exception as e:
+                        print(f"Error getting current user ARN: {str(e)}")
+                        return None
+
+                def create_dataset(self, dataset_name, datasource_arn, user_arn=None):
+                    """Create dataset with datasource - let QuickSight discover schema"""
+                    try:
+                        dataset_id = str(uuid.uuid4())
+                        print(f"{INFO} Creating dataset: {dataset_name} with datasource: {datasource_arn}")
+                        
+                        # Fix table map key to satisfy AWS constraint [0-9a-zA-Z-]*
+                        table_key = dataset_name.replace('_', '-').replace(' ', '-')[:64]
+                        table_key = ''.join(c for c in table_key if c.isalnum() or c == '-')
+                        
+                        # Get table schema from database
+                        input_columns = []
+                        try:
+                            schema_response = self.rds.execute_statement(
+                                resourceArn=self.cluster_arn,
+                                secretArn=self.secret_arn,
+                                database=os.getenv('DB_NAME', 'core'),
+                                sql=f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{dataset_name}' ORDER BY ordinal_position"
+                            )
+                            
+                            for record in schema_response['records']:
+                                column_name = record[0]['stringValue']
+                                data_type = record[1]['stringValue'].upper()
+                                
+                                # Map PostgreSQL types to QuickSight types
+                                if data_type in ['INTEGER', 'BIGINT', 'SMALLINT']:
+                                    qs_type = 'INTEGER'
+                                elif data_type in ['NUMERIC', 'DECIMAL', 'REAL', 'DOUBLE PRECISION']:
+                                    qs_type = 'DECIMAL'
+                                elif data_type in ['DATE', 'TIMESTAMP', 'TIMESTAMPTZ']:
+                                    qs_type = 'DATETIME'
+                                else:
+                                    qs_type = 'STRING'
+                                
+                                input_columns.append({'Name': column_name, 'Type': qs_type})
+                            
+                            if not input_columns:
+                                input_columns = [{'Name': 'id', 'Type': 'STRING'}]
+                                
+                        except Exception as e:
+                            print(f"{WARN} Could not get schema for {dataset_name}: {str(e)}")
+                            input_columns = [{'Name': 'id', 'Type': 'STRING'}]
+                        
+                        # Create dataset pointing to the table/view with the same name
+                        response = self.qs.create_data_set(
+                            AwsAccountId=self.account_id,
+                            DataSetId=dataset_id,
+                            Name=dataset_name,
+                            PhysicalTableMap={
+                                table_key: {
+                                    'RelationalTable': {
+                                        'DataSourceArn': datasource_arn,
+                                        'Name': dataset_name,  # Use dataset name as table name
+                                        'InputColumns': input_columns
+                                    }
+                                }
+                            },
+                            ImportMode='DIRECT_QUERY'
+                        )
+                        
+                        new_arn = response['Arn']
+                        # Grant full access to current user
+                        if not user_arn:
+                            user_arn = self.get_current_user_arn()
+                        
+                        permissions_status = "Failed"
+                        if user_arn:
+                            try:
+                                self.qs.update_data_set_permissions(
+                                    AwsAccountId=self.account_id,
+                                    DataSetId=dataset_id,
+                                    GrantPermissions=[{
+                                        'Principal': user_arn,
+                                        'Actions': [
+                                            'quicksight:DescribeDataSet',
+                                            'quicksight:DescribeDataSetPermissions', 
+                                            'quicksight:PassDataSet',
+                                            'quicksight:DescribeIngestion',
+                                            'quicksight:ListIngestions',
+                                            'quicksight:UpdateDataSet',
+                                            'quicksight:DeleteDataSet',
+                                            'quicksight:CreateIngestion',
+                                            'quicksight:CancelIngestion',
+                                            'quicksight:UpdateDataSetPermissions'
+                                        ]
+                                    }]
+                                )
+                                permissions_status = "Granted"
+                            except Exception as perm_error:
+                                permissions_status = f"Failed: {str(perm_error)}"
+                        
+                        # Store creation info for table display
+                        if not hasattr(self, 'created_datasets'):
+                            self.created_datasets = []
+                        
+                        self.created_datasets.append({
+                            'Dataset Name': dataset_name,
+                            'Columns': len(input_columns),
+                            'Permissions': permissions_status,
+                            'Status': 'Created'
+                        })
+                        
+                        return new_arn
+                        
+                    except Exception as e:
+                        print(f"{ERROR} Failed to create dataset {dataset_name}: {str(e)}")
+                        print(f"{ERROR} Datasource ARN: {datasource_arn}")
+                        return None
+
+                def get_and_map_datasets(self, new_datasource_arn):
+                    """Get analysis datasets from S3, available datasets from new datasource, and map them"""
+                    try:
+                        # Get analysis datasets from S3
+                        bucket, key = self.s3_uri.split('/')[2], '/'.join(self.s3_uri.split('/')[3:])
+                        
+                        with tempfile.NamedTemporaryFile(suffix='.qs') as temp_file:
+                            # 1. Download the S3 object into the temporary file.
+                            self.s3.download_fileobj(bucket, key, temp_file)
+                            
+                            # 2. Reset the file position to the beginning (0).
+                            temp_file.seek(0)
+                            
+                            # 3. Use the file object directly for ZipFile.
+                            with zipfile.ZipFile(temp_file, 'r') as zip_ref:
+                                with tempfile.TemporaryDirectory() as temp_dir:
+                                    zip_ref.extractall(temp_dir)
+                                    
+                                    old_datasets = []
+                                    for root, _, files in os.walk(temp_dir):
+                                        for file in files:
+                                            if file.endswith('.json'):
+                                                with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                                                    data = json.load(f)
+                                                
+                                                if 'definition' in data:
+                                                    for decl in data['definition'].get('dataSetIdentifierDeclarations', []):
+                                                        old_datasets.append({
+                                                            'name': decl.get('identifier', ''),
+                                                            'arn': decl.get('dataSetArn', '')
+                                                        })
+                        
+                        # Get all available datasets
+                        response = self.qs.list_data_sets(AwsAccountId=self.account_id, MaxResults=100)
+                        all_datasets = []
+                        
+                        for ds in response['DataSetSummaries']:
+                            all_datasets.append({
+                                'name': ds['Name'], 
+                                'arn': ds['Arn'],
+                                'id': ds['DataSetId']
+                            })
+                        
+                        # Create mapping strategies
+                        name_map = {ds['name']: ds['arn'] for ds in all_datasets}
+                        id_map = {ds['id']: ds['arn'] for ds in all_datasets}
+                        
+                        mapped_datasets = []
+                        table_data = []
+                        
+                        for old_ds in old_datasets:
+                            identifier = old_ds['name']
+                            old_arn = old_ds['arn']
+                            
+                            # Try multiple matching strategies
+                            new_arn = None
+                            status = "Not Found"
+                            
+                            # Strategy 1: Direct name match
+                            if identifier in name_map:
+                                new_arn = name_map[identifier]
+                                status = "Mapped by Name"
+                            # Strategy 2: Check if old ARN still exists
+                            elif old_arn in [ds['arn'] for ds in all_datasets]:
+                                new_arn = old_arn
+                                status = "Same ARN Exists"
+                            # Strategy 3: Extract dataset ID from old ARN
+                            else:
+                                try:
+                                    old_dataset_id = old_arn.split('/')[-1]
+                                    if old_dataset_id in id_map:
+                                        new_arn = id_map[old_dataset_id]
+                                        status = "Mapped by ID"
+                                except:
+                                    pass
+                            
+                            # Strategy 4: Create missing dataset
+                            if not new_arn:
+                                created_arn = self.create_dataset(identifier, new_datasource_arn)
+                                if created_arn:
+                                    new_arn = created_arn
+                                    status = "✅ Created New Dataset"
+                                else:
+                                    new_arn = old_arn
+                                    status = "❌ Creation Failed - Using Original ARN"
+                            
+                            mapped_datasets.append({'name': identifier, 'arn': new_arn})
+                            table_data.append({
+                                'Dataset Name': identifier,
+                                'Old ARN': old_arn,
+                                'New ARN': new_arn,
+                                'Status': status
+                            })
+                        
+                        # Print table
+                        print("\n=== Dataset Mapping Results ===")
+                        self.print_table(table_data, ['Dataset Name', 'Old ARN', 'New ARN', 'Status'])
+                        
+                        # Print created datasets table if any were created
+                        if hasattr(self, 'created_datasets') and self.created_datasets:
+                            print("\n=== Created Datasets ===")
+                            self.print_table(self.created_datasets, ['Dataset Name', 'Columns', 'Permissions', 'Status'])
+                        
+                        return mapped_datasets
+                    
+                    except Exception as e:
+                        return {'error': str(e)}
+
+                def update_analysis(self, mapped_datasets, principal_arn, new_datasource_arn, analysis_name="A360-Analysis", output_s3_key=None):
+                    """
+                    Update .qs file with new dataset mappings, permissions, and analysis name.
+                    
+                    This function downloads a zip archive from S3, extracts its contents, 
+                    updates specific JSON files inside, re-zips the modified content, 
+                    and uploads the new archive back to S3.
+                    """
+                    try:
+                        bucket = self.s3_uri.split('/')[2]
+                        key = '/'.join(self.s3_uri.split('/')[3:])
+                        
+                        # 1. Download the original zip file to a temporary file
+                        with tempfile.NamedTemporaryFile(suffix='.qs') as temp_file:
+                            self.s3.download_fileobj(bucket, key, temp_file)
+                            
+                            # CRITICAL FIX: After downloading, reset the file pointer to the beginning.
+                            # This allows the zipfile module to read the file from the start.
+                            temp_file.seek(0)
+                            
+                            # 2. Extract the contents to a temporary directory
+                            with tempfile.TemporaryDirectory() as temp_dir:
+                                with zipfile.ZipFile(temp_file, 'r') as zip_ref:
+                                    zip_ref.extractall(temp_dir)
+                                
+                                # 3. Create a mapping dictionary for easy lookup
+                                dataset_mapping = {ds['name']: ds['arn'] for ds in mapped_datasets}
+                                
+                                # 4. Walk the temporary directory and update all JSON files
+                                for root, _, files in os.walk(temp_dir):
+                                    for file in files:
+                                        if file.endswith('.json'):
+                                            json_path = os.path.join(root, file)
+                                            
+                                            with open(json_path, 'r', encoding='utf-8') as f:
+                                                data = json.load(f)
+                                            
+                                            # Update analysis name
+                                            if 'name' in data:
+                                                data['name'] = analysis_name
+                                            
+                                            # Update dataset declarations with new ARNs
+                                            if 'definition' in data:
+                                                definition = data['definition']
+                                                dataset_declarations = definition.get('dataSetIdentifierDeclarations', [])
+                                                for dataset_decl in dataset_declarations:
+                                                    identifier = dataset_decl.get('identifier', '')
+                                                    if identifier in dataset_mapping:
+                                                        dataset_decl['dataSetArn'] = dataset_mapping[identifier]
+                                            
+                                            # Update datasource ARNs in dataset definitions
+                                            updated_datasources = 0
+                                            if 'dataSets' in data:
+                                                for dataset in data['dataSets']:
+                                                    if 'physicalTableMap' in dataset:
+                                                        for table_key, table_def in dataset['physicalTableMap'].items():
+                                                            if 'relationalTable' in table_def and 'dataSourceArn' in table_def['relationalTable']:
+                                                                old_ds_arn = table_def['relationalTable']['dataSourceArn']
+                                                                table_def['relationalTable']['dataSourceArn'] = new_datasource_arn
+                                                                updated_datasources += 1
+                                                                print(f"{INFO} Updated datasource ARN: {old_ds_arn} -> {new_datasource_arn}")
+                                            
+                                            # Also check for datasource references in other locations
+                                            data_str = json.dumps(data)
+                                            if 'datasource/' in data_str:
+                                                print(f"{WARN} Found datasource references in {file}: {data_str.count('datasource/')} occurrences")
+                                                # Replace all datasource ARN patterns
+                                                old_pattern = r'arn:aws:quicksight:[^:]+:[^:]+:datasource/[^"]+'
+                                                import re
+                                                data_str = re.sub(old_pattern, new_datasource_arn, data_str)
+                                                data = json.loads(data_str)
+                                                print(f"{SUCCESS} Replaced all datasource ARN patterns with {new_datasource_arn}")
+                                            
+                                            # Update permissions for the principal_arn based on resource type
+                                            if principal_arn and 'permissions' in data:
+                                                # Check if this is an analysis or dataset based on content
+                                                if 'definition' in data and 'dataSetIdentifierDeclarations' in data.get('definition', {}):
+                                                    # This is an analysis
+                                                    data['permissions'] = [{
+                                                        'principal': principal_arn,
+                                                        'actions': [
+                                                            'quicksight:RestoreAnalysis',
+                                                            'quicksight:UpdateAnalysisPermissions',
+                                                            'quicksight:DeleteAnalysis',
+                                                            'quicksight:DescribeAnalysisPermissions',
+                                                            'quicksight:QueryAnalysis',
+                                                            'quicksight:DescribeAnalysis',
+                                                            'quicksight:UpdateAnalysis'
+                                                        ]
+                                                    }]
+                                                elif 'physicalTableMap' in data:
+                                                    # This is a dataset - use the first valid permission set
+                                                    data['permissions'] = [{
+                                                        'principal': principal_arn,
+                                                        'actions': [
+                                                            'quicksight:DescribeDataSet',
+                                                            'quicksight:DescribeDataSetPermissions',
+                                                            'quicksight:PassDataSet',
+                                                            'quicksight:DescribeIngestion',
+                                                            'quicksight:ListIngestions'
+                                                        ]
+                                                    }]
+                                            
+                                            # Write the modified data back to the JSON file
+                                            with open(json_path, 'w', encoding='utf-8') as f:
+                                                json.dump(data, f, indent=2)
+
+                                # 5. Create a new temporary file to hold the updated zip archive
+                                with tempfile.NamedTemporaryFile(suffix='.qs') as updated_temp_file:
+                                    # nosemgrep: tempfile-without-flush
+                                    with zipfile.ZipFile(updated_temp_file.name, 'w', zipfile.ZIP_DEFLATED) as zip_ref:
+                                        for root, _, files in os.walk(temp_dir):
+                                            for file in files:
+                                                file_path = os.path.join(root, file)
+                                                arc_name = os.path.relpath(file_path, temp_dir)
+                                                zip_ref.write(file_path, arc_name)
+                                    
+                                    # Ensure file is written to disk before using updated_temp_file.name
+                                    updated_temp_file.flush()  # nosemgrep: tempfile-without-flush
+
+                                    # 6. Upload the updated file to S3
+                                    if not output_s3_key:
+                                        output_s3_key = key.replace('.qs', f'_updated_{str(uuid.uuid4())[:8]}.qs')
+                                    
+                                    # Use the more efficient upload_file method, which streams from disk
+                                    # nosemgrep: tempfile-without-flush
+                                    self.s3.upload_file(updated_temp_file.name, Bucket=bucket, Key=output_s3_key)
+
+                                
+                        updated_s3_uri = f"s3://{bucket}/{output_s3_key}"
+                        print(f"{SUCCESS}: Updated analysis '{analysis_name}' saved to: {updated_s3_uri}")
+
+                        return {
+                            'success': True,
+                            's3_uri': updated_s3_uri,
+                            'analysis_name': analysis_name,
+                            'updated_datasets': len(mapped_datasets)
+                        }
+                            
+                    except Exception as e:
+                        return {'error': str(e)}
+
+                def import_qs_file(self, s3_uri, analysis_id=None):
+                    """Import QuickSight file from S3"""
+                    try:
+                        job_id = f"import-{str(uuid.uuid4())[:8]}"
+                        
+                        # Start import job with override parameters - always use new UUID
+                        new_analysis_id = str(uuid.uuid4())
+                        override_params = {
+                            'Analyses': [{
+                                'AnalysisId': new_analysis_id,
+                                'Name': self.analysis_name
+                            }],
+                            'DataSets': [{
+                                'DataSetId': str(uuid.uuid4()),
+                                'Name': f'Dataset-{str(uuid.uuid4())[:8]}'
+                            }]
+                        }
+                        print(f"{INFO} Using new analysis ID: {new_analysis_id}")
+                        print(f"{INFO} Including datasets in import for schema compatibility")
+                        
+                        self.qs.start_asset_bundle_import_job(
+                            AwsAccountId=self.account_id,
+                            AssetBundleImportJobId=job_id,
+                            AssetBundleImportSource={'S3Uri': s3_uri},
+                            OverrideParameters=override_params,
+                            FailureAction='DO_NOTHING'
+                        )
+                        
+                        print(f"{INFO} IMPORT STARTED WITH JOB ID: {job_id}")
+                        
+                        # Wait for completion with better error handling
+                        import time
+                        for attempt in range(60):  # Increased timeout to 10 minutes
+                            time.sleep(10) # nosemgrep: arbitrary-sleep
+                            try:
+                                status = self.qs.describe_asset_bundle_import_job(
+                                    AwsAccountId=self.account_id,
+                                    AssetBundleImportJobId=job_id
+                                )
+                                
+                                job_status = status['JobStatus']
+                                print(f"{INFO} IMPORT {job_status} (attempt {attempt+1}/60)")
+                                
+                                if job_status == 'SUCCESSFUL':
+                                    print(f"{SUCCESS} IMPORT {job_status} : Analysis Imported: Job Id {job_id}")
+                                    return {
+                                        'success': True,
+                                        'job_id': job_id,
+                                        'status': job_status
+                                    }
+                                elif job_status in ['FAILED', 'FAILED_ROLLBACK_COMPLETED']:
+                                    errors = status.get('Errors', [])
+                                    print(f"{ERROR} IMPORT {job_status} : Analysis NOT Imported: Job Id {job_id}")
+                                    for error in errors:
+                                        print(f"{ERROR} Error: {error}")
+                                    return {
+                                        'success': False,
+                                        'job_id': job_id,
+                                        'status': job_status,
+                                        'errors': errors
+                                    }
+                            except Exception as e:
+                                print(f"{ERROR} Error checking import status: {str(e)}")
+                                return {'success': False, 'error': f'Status check failed: {str(e)}'}
+                        
+                        print(f"{ERROR} Import timeout after 10 minutes")
+                        return {'success': False, 'error': 'Import timeout after 10 minutes'}
+                        
+                    except Exception as e:
+                        return {'error': str(e)}
+                
+
+            def lambda_handler(event=None, context=None):
+                try:
+                    migrator    = QSMigrator()
+
+                    print("*"*15, "Analysis Migration", "*"*15)
+                    print(f"Step 1: Get/Set Group and Principals for Group: a360-qs-admin")
+                    principal_arn   = migrator.get_qs_admin_group()
+
+                    print(f"\nStep 2: Get/Set Datasource ARN Based on Aurora Clusters")
+                    datasource      = migrator.get_cluster_datasources()
+                    if not datasource or len(datasource) == 0:
+                        print(f"{ERROR} No valid datasources found for Aurora cluster")
+                        return {'error': 'No valid datasources found for Aurora cluster'}
+                    
+                    datasource_arn  = datasource[0]['Arn']
+                    print(f"{SUCCESS} Using datasource: {datasource_arn}")
+                    
+                    # Validate datasource is accessible
+                    try:
+                        ds_detail = migrator.qs.describe_data_source(
+                            AwsAccountId=migrator.account_id,
+                            DataSourceId=datasource[0]['DataSourceId']
+                        )
+                        if ds_detail['DataSource'].get('Status') == 'DELETED':
+                            print(f"{ERROR} Datasource is deleted: {datasource_arn}")
+                            return {'error': f'Datasource is deleted: {datasource_arn}'}
+                    except Exception as e:
+                        print(f"{ERROR} Cannot access datasource {datasource_arn}: {str(e)}")
+                        return {'error': f'Cannot access datasource: {str(e)}'}
+                    
+                    print(f"\nStep 3: Get/Set Datasource Mappings to Analytics File")
+                    mapped_datasets = migrator.get_and_map_datasets(datasource_arn)
+
+                    print(f"\nStep 4: Get/Set QuickSightDatasets in Analysis Template, Import missing QuickSightDatasets or Update with existing")
+                    print(f"Step 5: Append Permissions to Groups")
+                    print(f"Step 6: Upload template to S3")
+                    analysis_name   = migrator.analysis_name
+                    analysis        = migrator.update_analysis(mapped_datasets, principal_arn, datasource_arn, analysis_name)
+
+                    print(f"\nStep 7: Import Analysis to QuickSight")
+                    result          = migrator.import_qs_file(analysis['s3_uri'])
+                    print(result)
+
+                    #print(f"\nStep 8: Migrating Datasource to use Secrets Manager instead of Username & Password Authentication")
+                    #sm_datasource   = migrator.set_datasource_to_secrets_manager(datasource_arn)
+                    #print(sm_datasource)
+                    
+                    return result
+
+                except Exception as e:
+                    return {'error': str(e)}
+
+
+            if __name__ == "__main__":
+                temp = lambda_handler()
+                
+  QSMigrationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${QSMigrationLambda}"
+      RetentionInDays: 14
+
+Outputs:
+  LambdaFunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt QSMigrationLambda.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaArn"
+  
+  LambdaRoleArn:
+    Description: Lambda Role ARN
+    Value: !GetAtt QSMigrationLambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RoleArn"
