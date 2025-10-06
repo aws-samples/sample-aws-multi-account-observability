@@ -1,6 +1,7 @@
 """ ONLY FOR DEVELOPMENT REMOVE ON LAMBDA """
 """ from dotenv import load_dotenv, dotenv_values 
 load_dotenv() """
+
 """ IMPORTS """
 import boto3
 import sys
@@ -15,8 +16,7 @@ from enum import Enum
 from typing import Dict, List, Any, Optional, Union
 import re
 import time
-
-""" Setting up Logging """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
 
@@ -1249,7 +1249,7 @@ class CoreManager:
 
 
     def process_file_data(self, data: Dict, file_name: str) -> None:
-        """Process and load all data from file"""
+        """Process and load all data from file with parallel loading"""
         self.stats['TOTAL'] += 1
         
         if not self.validate_data_structure(data):
@@ -1257,8 +1257,12 @@ class CoreManager:
             self.stats['SKIPPED'] += 1
             return
 
+        # Phase 1: Load account first (required for self.curr_acct)
+        if data.get('account'):
+            self.load_account_data(data['account'])
+        
+        # Phase 2: Load all other data in parallel
         loaders = {
-            'account'           : self.load_account_data,
             'config'            : self.load_config_data,
             'service'           : self.load_service_data,
             'cost'              : self.load_cost_data,
@@ -1275,12 +1279,18 @@ class CoreManager:
             'logs'              : self.load_logs_data
         }
         
-        for attr, loader in loaders.items():
-            if data.get(attr):
-                loader(data[attr])
+        with ThreadPoolExecutor(max_workers=14) as executor:
+            futures = {executor.submit(loader, data[attr]): attr 
+                       for attr, loader in loaders.items() if data.get(attr)}
+            
+            for future in as_completed(futures):
+                attr = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"{ERROR} Error loading {attr}: {e}")
         
         self.stats['LOADED'] += 1
-        
         return self.stats
 
 """ 5. Managing the Data Load Status """
@@ -1399,6 +1409,6 @@ def lambda_handler(event=None, context=None):
     
 """ 9. This is only for development testing, Runs on your local machine """
 if __name__ == "__main__":
-    #testing()
-    temp = lambda_handler()
+    testing()
+    #temp = lambda_handler()
     
