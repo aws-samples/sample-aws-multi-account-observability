@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv()
- """
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 
 from calendar import monthrange
 from enum import Enum
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 """ GLOBAL VARIABLES """
 REGION      = os.environ.get("REGION", "ap-southeast-1")
@@ -432,9 +434,10 @@ class AWSResourceManager:
         
     # Setting the Date Range
     def get_date(self):
+        
         if not self.end_date:
-            self.end_date = datetime.now()
-    
+            self.end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            
         if(self.interval == "YEARLY"):
             self.start_date = self.end_date.replace(month=1, day=1)
             self.end_date   = self.end_date.replace(month=12, day=31)
@@ -455,8 +458,7 @@ class AWSResourceManager:
 
         else:
             self.days = 1
-            self.start_date = self.end_date - timedelta(days=self.days)
-        
+            self.start_date = (self.end_date - timedelta(days=self.days)).replace(hour=0, minute=0, second=0, microsecond=0)
             # Default to 1 days ago since that's the maximum for detailed data
             
         #self.start_date = self.start_date.strftime('%Y-%m-%d')
@@ -569,39 +571,31 @@ class AWSResourceManager:
             response = AWSResponse(boto3.client('ce').get_cost_and_usage(
                 TimePeriod  =   {'Start': self.start_date.strftime('%Y-%m-%d'), 'End': self.end_date.strftime('%Y-%m-%d')},
                 Granularity =   self.interval,
-                Metrics     =   ['UnblendedCost', 'UsageQuantity'],
-                GroupBy     =   [{'Type': 'DIMENSION', 'Key': 'SERVICE'}, {'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'}],
+                Metrics     =   ['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost', 'UsageQuantity'],
+                GroupBy     =   [{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
                 Filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
             ))
 
-            aggregated_data = {}
+            result_data = []
             for result in response.data.get('ResultsByTime', []):
                 time_period = result['TimePeriod']
                 for group in result.get('Groups', []):
-                    service, usage_type = group['Keys']
-                    metrics     = group['Metrics']
-                    cost        = float(metrics['UnblendedCost']['Amount'])
+                    service = group['Keys'][0]
+                    metrics = group['Metrics']
+                    unblended = float(metrics['UnblendedCost']['Amount'])
                     utilization = float(metrics['UsageQuantity']['Amount']) or None
                     
-                    if service not in aggregated_data:
-                        aggregated_data[service] = {
-                            'service'       : service,
-                            'date_from'     : time_period['Start'],
-                            'date_to'       : time_period['End'],
-                            'cost'          : cost,
-                            'currency'      : metrics['UnblendedCost']['Unit'],
-                            'utilization'   : utilization,
-                            'utilization_unit'  : usage_type.split('-')[-1] if '-' in usage_type else None,
-                            'usage_types'       : [usage_type]
-                        }
-                    else:
-                        aggregated_data[service]['cost'] += cost
-                        if utilization:
-                            aggregated_data[service]['utilization'] = (aggregated_data[service]['utilization'] or 0) + utilization
-                        if usage_type not in aggregated_data[service]['usage_types']:
-                            aggregated_data[service]['usage_types'].append(usage_type)
+                    result_data.append({
+                        'service'               : service,
+                        'date_from'             : time_period['Start'],
+                        'date_to'               : time_period['End'],
+                        'cost'                  : unblended,
+                        'currency'              : metrics['UnblendedCost']['Unit'],
+                        'utilization'           : utilization,
+                        'utilization_unit'      : None
+                    })
 
-            result_data = sorted(aggregated_data.values(), key=lambda x: x['cost'], reverse=True)
+            result_data = sorted(result_data, key=lambda x: x['cost'], reverse=True)
 
             self.data.set_data(attr=AWSResourceType.SERVICE, data=result_data)
             self.set_log(def_type=AWSResourceType.SERVICE)
@@ -617,47 +611,57 @@ class AWSResourceManager:
             if not self.get_date():
                 return None
                 
+            
             config_client = boto3.client('config', region_name=REGION)
+            
+            compliant_count = 0
+            non_compliant_count = 0
             non_compliant_rules = []
-            total_rules = 0
             
-            config_rules = AWSResponse(config_client.describe_config_rules())
-            for rule in config_rules.data.get('ConfigRules', []):
-                rule_name = rule.get('ConfigRuleName')
-                total_rules += 1
+            # Step 1: Get compliance status (fast)
+            paginator = config_client.get_paginator('describe_compliance_by_config_rule')
+            for page in paginator.paginate():
+                for rule_compliance in page.get('ComplianceByConfigRules', []):
+                    compliance_type = rule_compliance.get('Compliance', {}).get('ComplianceType')
+                    if compliance_type == 'COMPLIANT':
+                        compliant_count += 1
+                    elif compliance_type == 'NON_COMPLIANT':
+                        non_compliant_count += 1
+                        non_compliant_rules.append(rule_compliance.get('ConfigRuleName'))
+            
+            total_rules = compliant_count + non_compliant_count
+            
+            # Step 2: Fetch resource details in parallel
+            def get_rule_details(rule_name):
                 try:
-                    compliance = AWSResponse(config_client.get_compliance_details_by_config_rule(
+                    details = config_client.get_compliance_details_by_config_rule(
                         ConfigRuleName=rule_name,
-                        ComplianceTypes=['NON_COMPLIANT']
-                    ))
-                    for result in compliance.data.get('EvaluationResults', []):
-                        result_time = result.get('ResultRecordedTime')
-                        start_date_aware, end_date_aware = self._get_timezone_aware_dates()
-                        if result_time and start_date_aware <= result_time <= end_date_aware:
-                            qualifier = result.get('EvaluationResultIdentifier', {}).get('EvaluationResultQualifier', {})
-                            non_compliant_rules.append({
-                                'rule_name'                 : rule_name,
-                                'resource_id'               : qualifier.get('ResourceId'),
-                                'resource_type'             : qualifier.get('ResourceType'),
-                                'error_date'                : result_time.isoformat() if result_time else None,
-                                'config_rule_invoked_time'  : result.get('ConfigRuleInvokedTime').isoformat() if result.get('ConfigRuleInvokedTime') else None
-                            })
-                except Exception as e:
-                    print(f"Error checking rule {rule_name}: {str(e)}")
-                    self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={f'rule_{rule_name}': str(e)})
+                        ComplianceTypes=['NON_COMPLIANT'],
+                        Limit=50
+                    )
+                    return [{
+                        'rule_name': rule_name,
+                        'resource_id': r.get('EvaluationResultIdentifier', {}).get('EvaluationResultQualifier', {}).get('ResourceId'),
+                        'resource_type': r.get('EvaluationResultIdentifier', {}).get('EvaluationResultQualifier', {}).get('ResourceType')
+                    } for r in details.get('EvaluationResults', [])]
+                except:
+                    return []
             
-            # Calculate compliance score
-            non_compliant_count = len(set(rule['rule_name'] for rule in non_compliant_rules))
-            compliance_score = ((total_rules - non_compliant_count) / max(total_rules, 1)) * 100
+            non_compliant_resources = []
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(get_rule_details, rule): rule for rule in non_compliant_rules}
+                for future in as_completed(futures):
+                    non_compliant_resources.extend(future.result())
             
             config_data = {
                 'date_from': self.start_date.strftime('%Y-%m-%d'),
                 'date_to': self.end_date.strftime('%Y-%m-%d'),
-                'compliance_score': round(compliance_score, 2),
+                'compliance_score': round((compliant_count / max(total_rules, 1)) * 100, 2),
                 'total_rules': total_rules,
-                'compliant_rules': total_rules - non_compliant_count,
+                'compliant_rules': compliant_count,
                 'non_compliant_rules': non_compliant_count,
-                'non_compliant_resources': non_compliant_rules
+                #'non_compliant_resource_count': len(non_compliant_resources),
+                'non_compliant_resources':non_compliant_resources
             }
             
             self.data.set_data(attr=AWSResourceType.CONFIG, data=config_data)
@@ -674,49 +678,61 @@ class AWSResourceManager:
             if not self.get_date():
                 return None
                 
-            ce_client = boto3.client('ce')
-            start_date = self.start_date.strftime('%Y-%m-%d')
-            end_date = self.end_date.strftime('%Y-%m-%d')
+            ce_client   = boto3.client('ce')
+            start_date  = self.start_date.strftime('%Y-%m-%d')
+            end_date    = self.end_date.strftime('%Y-%m-%d')
             
-            # Remove account filter for individual accounts
-            # account_filter = {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
-            
-            # Get current costs (no filter needed in individual account)
+            # Get all cost metrics
             current_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': start_date, 'End': end_date},
                 Granularity=self.interval,
-                Metrics=['UnblendedCost'],
-                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}]
+                Metrics=['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'],
+                Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
             ))
             
-            # Fix previous period calculation - use same duration
+            # Get service breakdown
+            service_costs = AWSResponse(ce_client.get_cost_and_usage(
+                TimePeriod={'Start': start_date, 'End': end_date},
+                Granularity=self.interval,
+                Metrics=['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'],
+                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
+                Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+            ))
+            
             prev_end = self.start_date.strftime('%Y-%m-%d')
             prev_start = (self.start_date - timedelta(days=self.days)).strftime('%Y-%m-%d')
             
             previous_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': prev_start, 'End': prev_end},
                 Granularity=self.interval,
-                Metrics=['UnblendedCost'],
-                GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}]
+                Metrics=['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'],
+                Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
             ))
             
-            # Calculate totals
-            current_total = sum(float(group['Metrics']['UnblendedCost']['Amount'])
-                               for result in current_costs.data['ResultsByTime']
-                               for group in result['Groups'])
+            # Calculate totals for all metrics - always sum for consistency
+            def extract_costs(response):
+                return {
+                    'unblended'     : sum(float(r['Total']['UnblendedCost']['Amount']) for r in response.data['ResultsByTime']),
+                    'blended'       : sum(float(r['Total']['BlendedCost']['Amount']) for r in response.data['ResultsByTime']),
+                    'net_unblended' : sum(float(r['Total']['NetUnblendedCost']['Amount']) for r in response.data['ResultsByTime']),
+                    'amortized'     : sum(float(r['Total']['AmortizedCost']['Amount']) for r in response.data['ResultsByTime'])
+                }
             
-            previous_total = sum(float(group['Metrics']['UnblendedCost']['Amount'])
-                                for result in previous_costs.data['ResultsByTime']
-                                for group in result['Groups'])
+            current     = extract_costs(current_costs)
+            previous    = extract_costs(previous_costs)
             
-            # Get top services and forecast
+            # Get top services
             top_services = []
-            if current_costs.data['ResultsByTime']:
-                latest_period = current_costs.data['ResultsByTime'][-1]
-                top_services = [{'service': service['Keys'][0], 'cost': float(service['Metrics']['UnblendedCost']['Amount'])}
-                               for service in sorted(latest_period['Groups'], 
-                                                   key=lambda x: float(x['Metrics']['UnblendedCost']['Amount']), 
-                                                   reverse=True)[:5]]
+            if service_costs.data['ResultsByTime']:
+                latest_period = service_costs.data['ResultsByTime'][-1]
+                top_services = [{
+                    'service': s['Keys'][0],
+                    'cost': float(s['Metrics']['UnblendedCost']['Amount']),
+                    #'unblended_cost': float(s['Metrics']['UnblendedCost']['Amount']),
+                    #'blended_cost': float(s['Metrics']['BlendedCost']['Amount']),
+                    #'net_unblended_cost': float(s['Metrics']['NetUnblendedCost']['Amount']),
+                    #'amortized_cost': float(s['Metrics']['AmortizedCost']['Amount'])
+                } for s in sorted(latest_period['Groups'], key=lambda x: float(x['Metrics']['UnblendedCost']['Amount']), reverse=True)[:5]]
             
             forecast_data = []
             try:
@@ -726,19 +742,26 @@ class AWSResourceManager:
                     Metric='UNBLENDED_COST',
                     Granularity=self.interval
                 ))
-                forecast_data = [{'period': {'start': point['TimePeriod']['Start'], 'end': point['TimePeriod']['End']}, 
-                                 'amount': float(point['MeanValue'])}
-                                for point in forecast.data.get('ForecastResultsByTime', [])]
+                forecast_data = [{'period': {'start': p['TimePeriod']['Start'], 'end': p['TimePeriod']['End']}, 'amount': float(p['MeanValue'])}
+                                for p in forecast.data.get('ForecastResultsByTime', [])]
             except Exception as e:
                 self.set_log(def_type=AWSResourceType.COST, status="Fail", value={'Forecast unavailable': str(e)})
             
-            cost_difference = current_total - previous_total
             summary = {
                 'account_id': self.account_id,
-                'current_period_cost': current_total,
-                'previous_period_cost': previous_total,
-                'cost_difference': cost_difference,
-                'cost_difference_percentage': (cost_difference / previous_total * 100) if previous_total > 0 else 0,
+                'current_period_cost': current['unblended'],
+                'previous_period_cost': previous['unblended'],
+                #'unblended_cost': current['unblended'],
+                #'blended_cost': current['blended'],
+                #'net_unblended_cost': current['net_unblended'],
+                #'amortized_cost': current['amortized'],
+                #'credits_refunds': current['unblended'] - current['net_unblended'],
+                #'previous_unblended_cost': previous['unblended'],
+                #'previous_blended_cost': previous['blended'],
+                #'previous_net_unblended_cost': previous['net_unblended'],
+                #'previous_amortized_cost': previous['amortized'],
+                'cost_difference': current['unblended'] - previous['unblended'],
+                'cost_difference_percentage': ((current['unblended'] - previous['unblended']) / previous['unblended'] * 100) if previous['unblended'] > 0 else 0,
                 'top_services': top_services,
                 'period': {'start': start_date, 'end': end_date, 'granularity': self.interval},
                 'forecast': forecast_data
@@ -889,55 +912,45 @@ class AWSResourceManager:
     #6.Fetching Security data across Security hub, Guard Duty, IAM, KMS, WAF, Inspector and Trusted Advisor.
     def get_security(self):
         try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
             result = {
-                'security_hub'          : [],
-                'guard_duty'            : [],
-                'iam'                   : [],
-                'kms'                   : [],
-                'waf'                   : [],
-                'waf_rules'             : [],
-                'cloudtrail'            : [],
-                'secrets_manager'       : [],
-                'certificate_manager'   : [],
-                'trusted_advisor'       : [],
-                'inspector'             : []
+                'security_hub': [],
+                'guard_duty': [],
+                'kms': [],
+                'waf': [],
+                'waf_rules': [],
+                'cloudtrail': [],
+                'secrets_manager': [],
+                'certificate_manager': [],
+                'inspector': []
             }
             
-            # 1. Security Hub (existing)
-            result['security_hub'] = self.get_security_hub()
+            # Fetch all security services in parallel
+            security_tasks = {
+                'security_hub': self.get_security_hub,
+                'guard_duty': self.get_guard_duty_security,
+                'kms': self.get_kms_security,
+                'waf': self.get_waf_security,
+                'waf_rules': self.get_waf_rules,
+                'cloudtrail': self.get_cloudtrail_security,
+                'secrets_manager': self.get_secrets_security,
+                'certificate_manager': self.get_certificate_security,
+                'inspector': self.get_inspector
+            }
             
-            # 2. GuardDuty
-            result['guard_duty'] = self.get_guard_duty_security()
-            
-            # 3. IAM Security
-            #result['iam'] = self.get_iam_security()
-            
-            # 4. KMS Keys
-            result['kms'] = self.get_kms_security()
-            
-            # 5. WAF Rules
-            result['waf'] = self.get_waf_security()
-
-            result['waf_rules'] = self.get_waf_rules()
-            
-            # 6. CloudTrail Events
-            result['cloudtrail'] = self.get_cloudtrail_security()
-            
-            # 7. Secrets Manager
-            result['secrets_manager'] = self.get_secrets_security()
-            
-            # 8. Certificate Manager
-            result['certificate_manager'] = self.get_certificate_security()
-            
-            # 9. X Ray
-            result['inspector'] = self.get_inspector()
-            
-            # 10. Trusted Advisor
-            #result['trusted_advisor'] = self.get_trusted_advisor()
+            with ThreadPoolExecutor(max_workers=9) as executor:
+                futures = {executor.submit(func): key for key, func in security_tasks.items()}
+                for future in as_completed(futures):
+                    key = futures[future]
+                    try:
+                        result[key] = future.result() or []
+                    except Exception as e:
+                        print(f"Error fetching {key}: {str(e)}")
+                        result[key] = []
             
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)
             self.set_log(def_type=AWSResourceType.SECURITY, status="Pass")
-
             return result
             
         except Exception as e:
@@ -953,53 +966,23 @@ class AWSResourceManager:
             securityhub = boto3.client('securityhub', region_name=REGION)
             service_findings = {}
             
-            # Query 1: Get NEW findings created today
-            next_token = None
-            while True:
-                params = {
-                    'Filters': {
-                        'CreatedAt': [{'Start': self.start_date.isoformat(), 'End': self.end_date.isoformat()}],
-                        'AwsAccountId': [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
-                        'SeverityLabel': [
-                            {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
-                            {'Value': 'HIGH', 'Comparison': 'EQUALS'},
-                            {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
-                            {'Value': 'LOW', 'Comparison': 'EQUALS'}
-                        ],
-                        'WorkflowStatus': [
-                            {'Value': 'NEW', 'Comparison': 'EQUALS'}
-                        ],
-                    },
-                    'MaxResults': 100
-                }
-                
-                if next_token:
-                    params['NextToken'] = next_token
-            
-                response = AWSResponse(securityhub.get_findings(**params))
-                if response.status != 200:
-                    break
-                
-                for finding in response.data['Findings']:
-                    self._process_finding(finding, service_findings)
-            
-                next_token = response.data.get('NextToken')
-                if not next_token:
-                    break
-            
-            # Query 2: Get RESOLVED findings updated today
+            # Query 1: Get NEW findings updated today
             next_token = None
             while True:
                 params = {
                     'Filters': {
                         'UpdatedAt'     : [{'Start': self.start_date.isoformat(), 'End': self.end_date.isoformat()}],
                         'AwsAccountId'  : [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
+                        'SeverityLabel' : [
+                            {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
+                            {'Value': 'HIGH', 'Comparison': 'EQUALS'},
+                            {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
+                            {'Value': 'LOW', 'Comparison': 'EQUALS'}
+                        ],
                         'WorkflowStatus': [
+                            {'Value': 'NEW', 'Comparison': 'EQUALS'},
                             {'Value': 'RESOLVED', 'Comparison': 'EQUALS'},
                             {'Value': 'SUPPRESSED', 'Comparison': 'EQUALS'}
-                        ],
-                        'SeverityLabel' : [
-                            {'Value': 'INFORMATIONAL', 'Comparison': 'NOT_EQUALS'}
                         ],
                     },
                     'MaxResults': 100
@@ -1007,17 +990,18 @@ class AWSResourceManager:
                 
                 if next_token:
                     params['NextToken'] = next_token
-
+            
                 response = AWSResponse(securityhub.get_findings(**params))
                 if response.status != 200:
                     break
                 
                 for finding in response.data['Findings']:
                     self._process_finding(finding, service_findings)
-
+            
                 next_token = response.data.get('NextToken')
                 if not next_token:
                     break
+            
 
             
             result = sorted(service_findings.values(), key=lambda x: x['total_findings'], reverse=True)
@@ -1028,7 +1012,6 @@ class AWSResourceManager:
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'security_hub': str(e)})
             return None
-
 
     def _process_finding(self, finding, service_findings):
         finding_id = finding.get('Id')
@@ -1084,7 +1067,6 @@ class AWSResourceManager:
             'generator_id': finding.get('GeneratorId'),
             'generator': finding.get('ProductName', '')
         })
-
 
     #Getting from Guard Duty
     def get_guard_duty_security(self):
@@ -2479,11 +2461,11 @@ if __name__ == "__main__":
     1. Run Historical Data Sets 
     - This will allow you to run data for a given period of time.
     """
-    start   = "1-1-2025"    # September 5 2025
-    end     = "17-9-2025"   # September 10 2025
-    #result  = lambda_handler({"history":True, "start":start, "end":end})
+    start   = "30-9-2025"    # September 5 2025
+    end     = "6-10-2025"   # September 10 2025
+    result  = lambda_handler({"history":True, "start":start, "end":end})
     
     """ 2. Run Daily Data Sets """
-    result  = lambda_handler({"history":False})
+    #result  = lambda_handler({"history":False})
 
     #print(result)
