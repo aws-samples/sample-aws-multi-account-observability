@@ -31,6 +31,27 @@ Parameters:
     Type: String
     Default: "None"
     Description: Partner name for the account
+  
+  Environment:
+    Type: String
+    Default: "None"
+    AllowedValues:
+      - "None"
+      - "PRODUCTION"
+      - "STAGING"
+      - "TEST"
+      - "UAT"
+      - "DEVELOPMENT"
+    Description: Environment type for the account
+  
+  Category:
+    Type: String
+    Default: "None"
+    AllowedValues:
+      - "None"
+      - "Internet"
+      - "Intranet"
+    Description: Classify whether the account is facing the Internet, Intranet or Both
 
 Resources:
   A360DLQ:
@@ -101,6 +122,7 @@ Resources:
               - config:DescribeConfigurationRecorderStatus
               - config:DescribeConfigRules
               - config:GetComplianceDetailsByConfigRule
+              - config:DescribeComplianceByConfigRule
             Resource: "*"
           - Sid: SecurityHubAccess
             Effect: Allow
@@ -263,6 +285,7 @@ Resources:
             Effect: Allow
             Action:
               - lambda:ListFunctions
+              - lambda:ListProvisionedConcurrencyConfigs
             Resource: "*"
           - Sid: ComputeOptimizerAccess
             Effect: Allow
@@ -343,7 +366,8 @@ Resources:
           ANALYTICS_KMS_KEY: !Ref AnalyticsKMSKey
           CUSTOMER: !Ref CustomerName
           PARTNER: !Ref PartnerName
-
+          CATEGORY: !Ref Category
+          ENVIRONMENT: !Ref Environment
       Code:
         ZipFile: |
           import boto3

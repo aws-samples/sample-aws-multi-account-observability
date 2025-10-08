@@ -1,7 +1,3 @@
-"""ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
-""" from dotenv import load_dotenv, dotenv_values
-load_dotenv() """
-
 """ IMPORTS """
 import sys
 import boto3
@@ -27,6 +23,8 @@ BUCKET      = os.environ.get("BUCKET")
 KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
 CUSTOMER    = os.environ.get("CUSTOMER", None)
 PARTNER     = os.environ.get("PARTNER", None)
+CATEGORY    = os.environ.get("CATEGORY", None)
+ENVIRONMENT = os.environ.get("ENVIRONMENT", None)
 
 SUCCESS     = "🟢"  
 FAIL        = "🟡"  
@@ -519,6 +517,8 @@ class AWSResourceManager:
             'account_arn': None,
             'partner_name': PARTNER if PARTNER else 'None',
             'customer_name': CUSTOMER if CUSTOMER else 'None',
+            'category': CATEGORY if CATEGORY else 'None',
+            'account_type': ENVIRONMENT if ENVIRONMENT else 'None',
             'joined_method': None,
             'joined_timestamp': acc.data.get("AccountCreatedDate") if acc is not None else None,
             'contact_info': {},
@@ -2463,9 +2463,9 @@ if __name__ == "__main__":
     """
     start   = "30-9-2025"    # September 5 2025
     end     = "6-10-2025"   # September 10 2025
-    result  = lambda_handler({"history":True, "start":start, "end":end})
+    #result  = lambda_handler({"history":True, "start":start, "end":end})
     
     """ 2. Run Daily Data Sets """
-    #result  = lambda_handler({"history":False})
+    result  = lambda_handler({"history":False})
 
     #print(result)

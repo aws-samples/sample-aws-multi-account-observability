@@ -1,7 +1,3 @@
-""" ONLY FOR DEVELOPMENT REMOVE ON LAMBDA """
-""" from dotenv import load_dotenv, dotenv_values 
-load_dotenv() """
-
 """ IMPORTS """
 import boto3
 import sys
@@ -517,11 +513,16 @@ class CoreManager:
             if 'account_id' in data:
                 account_data = {}
                 for k, v in data.items():
-                    if k not in ['contact_info', 'alternate_contacts']:
+                    if k not in ['contact_info', 'alternate_contacts', 'account_type', 'category' ]:
                         account_data[k]                 = v if v is not None else self._get_default_account(k, data.get('account_id'))
                         account_data["csp"]             = self._get_default_account("csp", "AWS")
-                        #account_data["account_type"]    = self._get_default_account("account_type", "PRODUCTION")
-                
+
+                    elif k == 'account_type' and v and v != 'None':
+                        account_data["account_type"] = v
+
+                    elif k == 'category' and v and v != 'None':
+                        account_data["category"] = v
+
                 # Handle partner_name and customer_name specifically
                 account_data["partner_name"] = data.get('partner_name', 'None')
                 account_data["customer_name"] = data.get('customer_name', 'None')
@@ -1365,7 +1366,7 @@ def load_data():
 def testing():
     core_db = CoreManager()
     try:
-        with open('data/2025-09-18_DAILY.json', 'r', encoding='utf-8') as f:
+        with open('data/2025-10-08_DAILY.json', 'r', encoding='utf-8') as f:
             file_content = f.read()
         print(f"*File Read")    
         data = json.loads(file_content)

@@ -21,6 +21,27 @@ Parameters:
     Type: String
     Default: "None"
     Description: Partner name for the account
+  
+  Environment:
+    Type: String
+    Default: "None"
+    AllowedValues:
+      - "None"
+      - "PRODUCTION"
+      - "STAGING"
+      - "TEST"
+      - "UAT"
+      - "DEVELOPMENT"
+    Description: Environment type for the account
+  
+  Category:
+    Type: String
+    Default: "None"
+    AllowedValues:
+      - "None"
+      - "Internet"
+      - "Intranet"
+    Description: Classify whether the account is facing the Internet, Intranet or Both
 
 Resources:
   # KMS Key for encryption
@@ -58,6 +79,8 @@ Resources:
 
   A360KMSKeyAlias:
     Type: AWS::KMS::Alias
+    DeletionPolicy: Retain
+    
     Properties:
       AliasName: alias/A360-key
       TargetKeyId: !Ref A360KMSKey
@@ -622,6 +645,7 @@ Resources:
             Effect: Allow
             Action:
               - lambda:ListFunctions
+              - lambda:ListProvisionedConcurrencyConfigs
             Resource: "*"
           - Sid: ComputeOptimizerAccess
             Effect: Allow
@@ -810,6 +834,8 @@ Resources:
           ANALYTICS_KMS_KEY: !GetAtt A360KMSKey.Arn
           CUSTOMER: !Ref CustomerName
           PARTNER: !Ref PartnerName
+          CATEGORY: !Ref Category
+          ENVIRONMENT: !Ref Environment
       KmsKeyArn: !GetAtt A360KMSKey.Arn
       Code:
         ZipFile: |
