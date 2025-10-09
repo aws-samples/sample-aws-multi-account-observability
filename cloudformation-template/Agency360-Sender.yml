@@ -213,6 +213,7 @@ Resources:
             Action:
               - ssm:DescribeInstanceInformation
               - ssm:GetInventory
+              - ssm:DescribeInstancePatches
             Resource: "*"
           - Sid: SupportAccess
             Effect: Allow

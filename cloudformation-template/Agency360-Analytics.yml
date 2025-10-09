@@ -4,8 +4,8 @@ Description: A360 - Analytics Account, S3 Bucket, KMS, Lambda and VPC with Auror
 Parameters:
   S3BucketName:
     Type: String
-    Description: Name of the S3 bucket to create
-    Default: A360-data-bucket
+    Description: Name of the S3 bucket to create* only in small letters NO CAPS
+    Default: a360-data-bucket
 
   SenderAccounts:
     Type: CommaDelimitedList
@@ -79,10 +79,9 @@ Resources:
 
   A360KMSKeyAlias:
     Type: AWS::KMS::Alias
-    DeletionPolicy: Retain
-    
+    DeletionPolicy: Delete
     Properties:
-      AliasName: alias/A360-key
+      AliasName: !Sub "alias/${AWS::StackName}-key"
       TargetKeyId: !Ref A360KMSKey
 
   # VPC Configuration
@@ -573,6 +572,7 @@ Resources:
             Action:
               - ssm:DescribeInstanceInformation
               - ssm:GetInventory
+              - ssm:DescribeInstancePatches
             Resource: "*"
           - Sid: SupportAccess
             Effect: Allow
@@ -711,6 +711,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       # Removed BucketName to allow CloudFormation to generate a name
+      BucketName: !Sub "${S3BucketName}-${AWS::AccountId}-logs"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -727,6 +728,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       # Removed BucketName to allow CloudFormation to generate a name
+      BucketName: !Sub "${S3BucketName}-${AWS::AccountId}-data"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -744,7 +746,7 @@ Resources:
         LogFilePrefix: access-logs/
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-s3-bucket"
+          Value: !Sub "${AWS::StackName}-S3Bucket"
 
   # Permission for S3 to invoke Receiver Lambda
   ReceiverLambdaInvokePermission:
