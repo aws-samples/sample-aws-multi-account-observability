@@ -517,7 +517,7 @@ class CoreManager:
                     if k in ['account_type', 'category', 'customer_name', 'partner_name' ] and v and v != 'None':
                         account_data[k] = v
                     
-                    elif k not in ['contact_info', 'alternate_contacts', 'account_type', 'category' ]:
+                    elif k not in ['contact_info', 'alternate_contacts']:
                         account_data[k]                 = v if v is not None else self._get_default_account(k, data.get('account_id'))
                         account_data["csp"]             = self._get_default_account("csp", "AWS")
 
