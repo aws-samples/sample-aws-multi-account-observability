@@ -513,19 +513,13 @@ class CoreManager:
             if 'account_id' in data:
                 account_data = {}
                 for k, v in data.items():
-                    if k not in ['contact_info', 'alternate_contacts', 'account_type', 'category' ]:
+                    
+                    if k in ['account_type', 'category', 'customer_name', 'partner_name' ] and v and v != 'None':
+                        account_data[k] = v
+                    
+                    elif k not in ['contact_info', 'alternate_contacts', 'account_type', 'category' ]:
                         account_data[k]                 = v if v is not None else self._get_default_account(k, data.get('account_id'))
                         account_data["csp"]             = self._get_default_account("csp", "AWS")
-
-                    elif k == 'account_type' and v and v != 'None':
-                        account_data["account_type"] = v
-
-                    elif k == 'category' and v and v != 'None':
-                        account_data["category"] = v
-
-                # Handle partner_name and customer_name specifically
-                account_data["partner_name"] = data.get('partner_name', 'None')
-                account_data["customer_name"] = data.get('customer_name', 'None')
 
                 # Upsert account
                 result = self.db.upsert('accounts', account_data, 'account_id', self.stats)
