@@ -261,8 +261,6 @@ Resources:
       SubnetId: !Ref PrivateSubnet3
       RouteTableId: !Ref PrivateRouteTable
 
-
-
   # QuickSight VPC Endpoint
   QuickSightVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -666,6 +664,32 @@ Resources:
             Action:
               - sqs:SendMessage
             Resource: !GetAtt LambdaDLQ.Arn
+
+  A360QuicksightVpcPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: A360QuicksightVpcPolicy
+      Roles:
+        - aws-quicksight-service-role-v0
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: QuickSightVpcAccess
+            Effect: Allow
+            Action:
+              - quicksight:DeleteVPCConnection
+              - quicksight:DescribeVPCConnection
+              - quicksight:ListVPCConnections
+              - quicksight:UpdateVPCConnection
+              - quicksight:CreateVPCConnection
+              - iam:ListRoles
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - ec2:DescribeSubnets
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeVpcs
+            Resource: "*"
 
   # Lambda Execution Roles
   A360LambdaReceiverRole:
