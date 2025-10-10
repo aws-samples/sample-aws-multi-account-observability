@@ -39,7 +39,7 @@ Resources:
   QuickSightServiceRoleSecretsPolicy:
     Type: AWS::IAM::Policy
     Properties:
-      PolicyName: A360QuickSightSecretsManagerAccess
+      PolicyName: !Sub "A360QuickSightMigrationSecretsManagerAccess-${AWS::StackName}"
       Roles:
         - aws-quicksight-service-role-v0
         - aws-quicksight-secretsmanager-role-v0
