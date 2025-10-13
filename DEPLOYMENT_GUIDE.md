@@ -33,7 +33,8 @@ Below is the series of steps that you should follow in a sequential format to en
    a. Create stack
    b. Choose an existing template
    c. Upload the template file
-2. Browse and upload the file Agency360-Analytics.yml which could be found within the sample-aws-multi-account-observability/cloudformation-template/ folder
+2. Browse and upload the file [Agency360-Analytics.yml](cloudformation-template/Agency360-Analytics.yml)
+ which could be found within the sample-aws-multi-account-observability/cloudformation-template/ folder
 3. Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice.
 4. Then click Next
 5. There will be a requirement to set 6 parameters
@@ -169,7 +170,7 @@ Set the EventBridge Trigger
    a. Create stack
    b. Choose an existing template
    c. Upload the template file
-2. Browse and upload the file Agency360-QS-Migration.yml which could be found within the sample-aws-multi-account-observability/cloudformation-template/ folder
+2. Browse and upload the file [Agency360-QS-Migration.yml](cloudformation-template/Agency360-QS-Migration.yml) which could be found within the sample-aws-multi-account-observability/cloudformation-template/ folder
 3. Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice.
 4. Then click Next
 5. There will be a requirement to set 7 parameters
@@ -200,7 +201,8 @@ Note: When you create an Analytics Account, all the sender scripts are loaded in
    a. Create stack
    b. Choose an existing template
    c. Upload the template file
-3. Browse and upload the file Agency360-QS-Sender.yml which could be found within the sample-aws-multi-account-observability/cloudformation-template/ folder
+3. Browse and upload the file [Agency360-Sender.yml](cloudformation-template/Agency360-Sender.yml)
+ which could be found within the sample-aws-multi-account-observability/cloudformation-template/ folder
 4. Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice.
 5. Then click Next
 6. There will be a requirement to set 8 parameters
