@@ -83,8 +83,8 @@ sample-aws-multi-account-observability/
 - **Processing & Audit**: Data processing status, error tracking, health scores, and operational logs
 
 ### Analytics & Visualization
-- **30+ Database Tables**: Comprehensive schema covering all AWS observability aspects
-- **25+ Optimized Views**: Pre-built analytics views with calculated KPIs and metrics
+- **33+ Database Tables**: Comprehensive schema covering all AWS observability aspects
+- **41+ Optimized Views**: Pre-built analytics views with calculated KPIs and metrics
 - **Executive Dashboards**: Summary views with health scores, cost trends, and security posture
 - **Cost Optimization**: Advanced cost analysis with forecasting and savings opportunities
 - **Security Analytics**: Multi-dimensional security monitoring with compliance tracking
@@ -118,6 +118,8 @@ sample-aws-multi-account-observability/
   - Systems Manager (for inventory data)
 
 ## Quick Start
+
+#### *Click here for the Detailed [Deployment Guide](DEPLOYMENT_GUIDE.md) 
 
 ### 1. Deploy Analytics Infrastructure
 
