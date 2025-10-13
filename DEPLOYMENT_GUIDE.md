@@ -1,6 +1,6 @@
-# View360 Deployment Guide
+# Deployment Guide
 
-This is a comprehensive deployment guide for View 360 (Multi account observability) within AWS.
+This is a comprehensive deployment guide for Multi account observability within AWS.
 
 ## Introduction & Architecture
 
