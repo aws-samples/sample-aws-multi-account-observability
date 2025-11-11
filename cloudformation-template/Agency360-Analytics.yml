@@ -309,7 +309,7 @@ Resources:
     Properties:
       # Removed DBClusterIdentifier to allow CloudFormation to generate a name
       Engine: aurora-postgresql
-      EngineVersion: '15.4'
+      EngineVersion: '15.12'
       Port: 5432
       DatabaseName: core
       MasterUsername: postgres
