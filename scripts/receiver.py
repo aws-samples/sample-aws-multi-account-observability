@@ -106,30 +106,44 @@ class AWSBoto3Permissions:
                                                             'action'    : 'get_caller_identity',
                                                             'params'    : params,
                                                             'status'    : False,
+                                                            "reqd"      : True
                                                         },
                                     'account'            : {
                                                             'name'      : 'Account',
                                                             'client'    : boto3.client('account'),
                                                             'action'    : 'get_contact_information',
                                                             'params'    : params,
-                                                            'status'    : False
+                                                            'status'    : False,
+                                                            "reqd"      : False
                                                         },
                                     'rds-data'           : {
                                                             'name'      : 'Aurora RDS',
                                                             'client'    : boto3.client('rds-data', region_name=REGION),
                                                             'action'    : 'close',
-                                                            'params'    : params
+                                                            'params'    : params,
+                                                            'status'    : False,
+                                                            "reqd"      : True
                                                         },
                                     's3'                : {
                                                             'name'      : 's3',
                                                             'client'    : boto3.client('s3', region_name=REGION),
                                                             'action'    : 'close',
-                                                            'params'    : params
+                                                            'params'    : params,
+                                                            'status'    : False,
+                                                            "reqd"      : True
                                                         }
                                 }
 
+    def _is_optional(self, reqd):
+        if not reqd:
+            return "Optional"
+        else:
+            return "Required" 
+
     def _check(self, service):
         try:
+            is_opt = self._is_optional(service["reqd"])
+
             if service["params"]:
                 service["client"].__getattribute__(service["action"])(
                     **service["params"]
@@ -137,12 +151,12 @@ class AWSBoto3Permissions:
             else:
                 service["client"].__getattribute__(service["action"])()
             service["status"] = True
-            print(f"{SUCCESS} Connected to {service['name']}")
+            print(f"{SUCCESS} Connected to {service['name']} ({is_opt})")
         except ClientError as e:
-            print(f"{FAIL} Not Connected to {service['name']}: {str(e)}")
+            print(f"{FAIL} Not Connected to {service['name']} ({is_opt}): {str(e)}")
             service["status"] = False
         except Exception as e:
-            print(f"{ERROR} Error testing {service['name']}: {str(e)}")
+            print(f"{ERROR} Error testing {service['name']} ({is_opt}): {str(e)}")
             service["status"] = None
 
     def test(self):

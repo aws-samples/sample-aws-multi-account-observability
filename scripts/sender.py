@@ -298,7 +298,7 @@ class AWSBoto3Permissions:
                 "reqd"  : True
             },
             "rds": {
-                "name": "RDS (Optional)",
+                "name": "RDS",
                 "client": boto3.client("rds", region_name=REGION),
                 "action": "describe_db_instances",
                 "params": params,
@@ -306,7 +306,7 @@ class AWSBoto3Permissions:
                 "reqd"  : False
             },
             "s3": {
-                "name": "S3 (Optional)",
+                "name": "S3",
                 "client": boto3.client("s3", region_name=REGION),
                 "action": "list_buckets",
                 "params": params,
@@ -314,7 +314,7 @@ class AWSBoto3Permissions:
                 "reqd"  : False
             },
             "elbv2": {
-                "name": "ELB v2 (Optional)",
+                "name": "ELB v2",
                 "client": boto3.client("elbv2", region_name=REGION),
                 "action": "describe_load_balancers",
                 "params": params,
@@ -322,7 +322,7 @@ class AWSBoto3Permissions:
                 "reqd"  : False
             },
             "autoscaling": {
-                "name": "Auto Scaling (Optional)",
+                "name": "Auto Scaling",
                 "client": boto3.client("autoscaling", region_name=REGION),
                 "action": "describe_auto_scaling_groups",
                 "params": params,
@@ -330,7 +330,7 @@ class AWSBoto3Permissions:
                 "reqd"  : False
             },
             "lambda": {
-                "name": "Lambda (Optional)",
+                "name": "Lambda",
                 "client": boto3.client("lambda", region_name=REGION),
                 "action": "list_functions",
                 "params": params,
@@ -338,7 +338,7 @@ class AWSBoto3Permissions:
                 "reqd"  : False
             },
             "compute-optimizer": {
-                "name": "Compute Optimizer (Optional)",
+                "name": "Compute Optimizer",
                 "client": boto3.client("compute-optimizer", region_name=REGION),
                 "action": "get_ec2_instance_recommendations",
                 "params": params,
@@ -347,8 +347,16 @@ class AWSBoto3Permissions:
             },
         }
 
+    def _is_optional(self, reqd):
+        if not reqd:
+            return "Optional"
+        else:
+            return "Required"   
+
     def _check(self, service):
         try:
+            is_opt = self._is_optional(service["reqd"])
+            
             if service["params"]:
                 service["client"].__getattribute__(service["action"])(
                     **service["params"]
@@ -356,12 +364,12 @@ class AWSBoto3Permissions:
             else:
                 service["client"].__getattribute__(service["action"])()
             service["status"] = True
-            print(f"{SUCCESS} Connected to {service['name']}")
+            print(f"{SUCCESS} Connected to {service['name']} ({is_opt})")
         except ClientError as e:
-            print(f"{FAIL} Not Connected to {service['name']}: {str(e)}")
+            print(f"{FAIL} Not Connected to {service['name']} ({is_opt}): {str(e)}")
             service["status"] = False
         except Exception as e:
-            print(f"{ERROR} Error testing {service['name']}: {str(e)}")
+            print(f"{ERROR} Error testing {service['name']} ({is_opt}): {str(e)}")
             service["status"] = None
 
     def test(self):
