@@ -1501,25 +1501,24 @@ class AWSResourceManager:
                 issued_at = cert_info.get('IssuedAt')
                 
                 # Filter certificates created or issued within date range
-                if (created_at and start_date_aware <= created_at <= end_date_aware) or \
-                   (issued_at and start_date_aware <= issued_at <= end_date_aware):
+                #if (created_at and start_date_aware <= created_at <= end_date_aware) or (issued_at and start_date_aware <= issued_at <= end_date_aware):
                     
-                    cert_data.append({
-                        'arn': cert.get('CertificateArn'),
-                        'domain_name': cert.get('DomainName'),
-                        'subject_alternative_names': cert_info.get('SubjectAlternativeNames', []),
-                        'status': cert_info.get('Status'),
-                        'type': cert_info.get('Type'),
-                        'key_algorithm': cert_info.get('KeyAlgorithm'),
-                        'signature_algorithm': cert_info.get('SignatureAlgorithm'),
-                        'created_at': created_at,
-                        'issued_at': issued_at,
-                        'not_before': cert_info.get('NotBefore'),
-                        'not_after': cert_info.get('NotAfter'),
-                        'renewal_eligibility': cert_info.get('RenewalEligibility'),
-                        'key_usages': cert_info.get('KeyUsages', []),
-                        'extended_key_usages': cert_info.get('ExtendedKeyUsages', [])
-                    })
+                cert_data.append({
+                    'arn': cert.get('CertificateArn'),
+                    'domain_name': cert.get('DomainName'),
+                    'subject_alternative_names': cert_info.get('SubjectAlternativeNames', []),
+                    'status': cert_info.get('Status'),
+                    'type': cert_info.get('Type'),
+                    'key_algorithm': cert_info.get('KeyAlgorithm'),
+                    'signature_algorithm': cert_info.get('SignatureAlgorithm'),
+                    'created_at': created_at,
+                    'issued_at': issued_at,
+                    'not_before': cert_info.get('NotBefore'),
+                    'not_after': cert_info.get('NotAfter'),
+                    'renewal_eligibility': cert_info.get('RenewalEligibility'),
+                    'key_usages': cert_info.get('KeyUsages', []),
+                    'extended_key_usages': cert_info.get('ExtendedKeyUsages', [])
+                })
             return cert_data
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'certificate_manager': str(e)})
