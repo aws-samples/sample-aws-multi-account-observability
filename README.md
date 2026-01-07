@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://python.org)
 [![CloudFormation](https://img.shields.io/badge/CloudFormation-Template-green.svg)](https://aws.amazon.com/cloudformation/)
 [![Boto3](https://img.shields.io/badge/Boto3-1.38.0-yellow.svg)](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 ## What is AWS Multi-Account Observability & Analytics?
 A comprehensive AWS multi-account observability platform that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and designed for enterprise-scale monitoring with 15+ AWS service integrations, advanced security analytics, and cost optimization insights.
