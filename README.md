@@ -8,10 +8,13 @@
 A comprehensive AWS multi-account analytics platform that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and Amazon QuickSight.
 
 ## Architecture
-<!-- ![View360 Architecture](doc/files/img/view360-architecture.png) -->
+<div align="center"><img width="888" height="678" alt="View360-A360-LABELED-Option1-Only Lambda" src="https://github.com/user-attachments/assets/84bbe01e-cc6e-47ac-bac1-75c7cbc2f19c" /></div>
 
 ### 1. Data Collection (Sender Accounts)
 <!-- ![Sender Accounts Flow](doc/files/img/view360-sender-flow.png) -->
+
+
+
 
 ### 2. Data Processing (Analytics Account)
 <!-- ![Analytics Accounts Flow](doc/files/img/view360-analytics-flow.png) -->
