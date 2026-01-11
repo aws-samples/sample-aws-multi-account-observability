@@ -1,8 +1,7 @@
 # Option A - Serverless (Only Lambda) : Introduction & Architecture
 
 This is a comprehensive wiki guide for View 360 (Multi account observability) within AWS. Using a Serverless approach with only Lambda functions handling the transactions.
-
-<div align="center"><img src="uploads/3139f5455e50693f455523a8a38acd7c/image.png" width="380" height="459" alt="image"></div>
+<div align="center"><img width="888" height="678" alt="View360-A360-LABELED-Option1-Only Lambda" src="https://github.com/user-attachments/assets/e6c06b88-2b35-45c4-8a0e-64654e2855e9" /></div>
 
 # Pre-requisites
 
