@@ -2,7 +2,9 @@
 
 This is a comprehensive deployment guide for View 360 (Multi account observability) within AWS. Using a EC2 & SSM agent in the Receiver with only Lambda functions handling the transactions
 
-<div align="center"><img src="uploads/3139f5455e50693f455523a8a38acd7c/image.png" width="380" height="459" alt="image"></div>
+<div align="center"><img width="962" height="767" alt="View360-A360-LABELED-Option2-With EC2" src="https://github.com/user-attachments/assets/b966218a-429e-47bd-9c0a-22c5bc0bc643" /></div>
+
+
 
 # Pre-requisites
 
