@@ -985,12 +985,12 @@ class AWSResourceManager:
             with ThreadPoolExecutor(max_workers=9) as executor:
                 futures = {executor.submit(func): key for key, func in security_tasks.items()}
                 for future in as_completed(futures):
-                    key = futures[future]
+                    temp = futures[future]
                     try:
-                        result[key] = future.result() or []
+                        result[temp] = future.result() or []
                     except Exception as e:
-                        print(f"Error fetching {key}: {str(e)}")
-                        result[key] = []
+                        print(f"Error {temp}: {str(e)}")
+                        result[temp] = []
             
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)
             self.set_log(def_type=AWSResourceType.SECURITY, status="Pass")
