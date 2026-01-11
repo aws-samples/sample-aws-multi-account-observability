@@ -1,4 +1,4 @@
-# View360 Analytics
+# Multi Account Observability
 [![AWS](https://img.shields.io/badge/AWS-Lambda-orange.svg)](https://aws.amazon.com/lambda/)
 [![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://python.org)
 [![CloudFormation](https://img.shields.io/badge/CloudFormation-Template-green.svg)](https://aws.amazon.com/cloudformation/)
@@ -12,20 +12,16 @@ A comprehensive AWS multi-account analytics platform that aggregates, processes,
 
 ### 1. Data Collection (Sender Accounts)
 <!-- ![Sender Accounts Flow](doc/files/img/view360-sender-flow.png) -->
-
-
-
+<div align="center"><img width="642" height="143" alt="a360-sender-flow drawio" src="https://github.com/user-attachments/assets/0764d28e-1db1-46ee-beb4-28cb05ef4237" /></div>
 
 ### 2. Data Processing (Analytics Account)
-<!-- ![Analytics Accounts Flow](doc/files/img/view360-analytics-flow.png) -->
+The Analytics account can be set up in 2 different methods that are described below. This can be selected upon running the CloudFormation template.
 
-### Complete Flow
-```
-[Sender Account] EventBridge -> Lambda -> S3 (Analytics Account) ----------> Lambda (Receiver) -> Aurora -> QuickSight
-                                  │              │                                  │
-                                  ▼              ▼                                  ▼
-                               sender.py  data/SENDER_ACCOUNT/*.json            receiver.py
-```
+#### Option A: Serverless (Lambda Only)
+<div align="center"><img width="642" height="205" alt="a360-receiver-lambda-flow" src="https://github.com/user-attachments/assets/81dc93ed-6e1c-4eb6-a2f4-d641cfe24fdf" /></div>
+
+#### Option B: Lambda + EC2 + Systems Manager
+<div align="center"><img width="642" height="205" alt="a360-receiver-ec2-flow" src="https://github.com/user-attachments/assets/f62b943c-b9df-4ad8-9071-1d11da7d8d9e" /></div>
 
 ## File Description
 
@@ -43,7 +39,8 @@ A comprehensive AWS multi-account analytics platform that aggregates, processes,
 ### Flow
 ```
 Sender Account: EventBridge → Lambda → S3 (sender.py) → Collect Data → Upload to Analytics S3
-Analytics Account: S3 Event → Lambda → S3 (receiver.py) → Process Data → Aurora → Move to loaded/
+Analytics Account Option A: S3 Event → Lambda → S3 (receiver.py) → Process Data → Aurora → Move to loaded/
+Analytics Account Option B: S3 Event → Lambda → EC2 → S3 (receiver.py) → Process Data → Aurora → Move to loaded/
 ```
 
 ## Features
