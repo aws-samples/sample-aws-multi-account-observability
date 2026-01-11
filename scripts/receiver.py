@@ -1439,7 +1439,8 @@ class CoreManager:
                 try:
                     future.result()
                 except Exception as e:
-                    print(f"{ERROR} Error {attr}: {e}")
+                    print("Error: At 14-42")
+                    #continue
         
         self.stats['LOADED'] += 1
         return self.stats
