@@ -3,12 +3,14 @@
 -- account_full: account_id + "-" + account_name
 -- project_product_name: product name from products table via product_accounts junction
 
--- Accounts view
+-- 1. Accounts view
 CREATE OR REPLACE VIEW view_accounts AS
 SELECT
     a.*,
     a.account_id as account,
     a.category as account_category,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -20,19 +22,23 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Contact info view
+-- 2. Contact info view
 CREATE OR REPLACE VIEW view_contact_info AS
 SELECT
     ci.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
     contact_info ci
-    JOIN accounts a ON ci.account_id = a.account_id
+    JOIN accounts a ON ci.account_id = a.id
     LEFT JOIN (
         SELECT DISTINCT ON (account_id) account_id, product_id
         FROM product_accounts
@@ -40,19 +46,23 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Alternate contacts view
+-- 3. Alternate contacts view
 CREATE OR REPLACE VIEW view_alternate_contacts AS
 SELECT
     ac.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
     alternate_contacts ac
-    JOIN accounts a ON ac.account_id = a.account_id
+    JOIN accounts a ON ac.account_id = a.id
     LEFT JOIN (
         SELECT DISTINCT ON (account_id) account_id, product_id
         FROM product_accounts
@@ -60,14 +70,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Services view
+-- 4. Services view
 CREATE OR REPLACE VIEW view_acct_serv AS
 SELECT
     s.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -80,14 +94,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Cost reports view
+-- 5. Cost reports view
 CREATE OR REPLACE VIEW view_acct_cost_rep AS
 SELECT
     cr.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     cr.period_start as date_from,
@@ -102,14 +120,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Service costs view
+--6.  Service costs view
 CREATE OR REPLACE VIEW view_acct_serv_cost AS
 SELECT
     sc.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     cr.period_start as date_from,
@@ -125,14 +147,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Cost forecasts view
+--7. Cost forecasts view
 CREATE OR REPLACE VIEW view_acct_cost_rep_forecast AS
 SELECT
     cf.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     cr.period_start as date_from,
@@ -148,14 +174,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Security view
+--8. Security view
 CREATE OR REPLACE VIEW view_acct_security AS
 SELECT
     s.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -168,14 +198,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Findings view
+--9. Findings view
 CREATE OR REPLACE VIEW view_acct_security_findings_details AS
 SELECT
     f.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -189,25 +223,35 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Products view
+--10. Products view
 CREATE OR REPLACE VIEW view_products AS
 SELECT
     pr.*,
     NULL as account,
+    NULL as account_region,
     NULL as account_name,
+    NULL as account_type,
+    NULL as account_category,
+    NULL as account_status,
+    NULL as account_partner,
+    NULL as account_customer,
     NULL as account_full,
     pr.name as project_product_name
 FROM
     products pr;
 
--- Product accounts view
+--11. Product accounts view
 CREATE OR REPLACE VIEW view_product_acct AS
 SELECT
     pa.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -215,14 +259,18 @@ FROM
     JOIN accounts a ON pa.account_id = a.id
     JOIN products p ON pa.product_id = p.id;
 
--- Products view with account relationships (CORRECTED)
+--12. Products view with account relationships (CORRECTED)
 CREATE OR REPLACE VIEW view_acct_products AS
 SELECT
     p.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     pr.name as project_product_name
 FROM
@@ -236,14 +284,18 @@ FROM
     ) pa2 ON a.id = pa2.account_id
     LEFT JOIN products pr ON pa2.product_id = pr.id;
 
--- Logs view
+--13. Logs view
 CREATE OR REPLACE VIEW view_acct_logs AS
 SELECT
     l.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as acct_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -256,14 +308,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Log messages view
+--14. Log messages view
 CREATE OR REPLACE VIEW view_acct_log_messages AS
 SELECT
     lm.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -277,14 +333,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Config reports view
+--15. Config reports view
 CREATE OR REPLACE VIEW view_config_reports AS
 SELECT
     cr.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -297,14 +357,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Non compliant resources view
+--16. Non compliant resources view
 CREATE OR REPLACE VIEW view_non_compliant_resources AS
 SELECT
     ncr.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -318,14 +382,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Service resources view
+--17. Service resources view
 CREATE OR REPLACE VIEW view_service_resources AS
 SELECT
     sr.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -339,32 +407,40 @@ FROM
     LEFT JOIN products p ON pa.product_id = p.id;
 
 
--- Create summary view
+--18. Create summary view
 CREATE OR REPLACE VIEW view_service_resources_summary AS
 SELECT
     a.account_id,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     sr.service_name,
     sr.resource_type,
-    sr.region,
+    sr.region as resource_region,
     sr.availability_zone,
     COUNT(*) as resource_count,
     COUNT(CASE WHEN sr.state IN ('running', 'available', 'Active') THEN 1 END) as active_resources,
     COUNT(CASE WHEN sr.state IN ('stopped', 'Inactive') THEN 1 END) as inactive_resources
 FROM service_resources sr
 LEFT JOIN accounts a ON sr.account_id = a.id
-GROUP BY a.account_id, a.account_name, a.account_type, a.category, sr.service_name, sr.resource_type, sr.region, sr.availability_zone;
+GROUP BY a.account_id, a.region, a.account_name, a.account_type, a.category, a.account_status, a.partner_name, a.customer_name, sr.service_name, sr.resource_type, sr.region, sr.availability_zone;
 
--- Compute optimizers view
+--19. Compute optimizers view
 CREATE OR REPLACE VIEW view_compute_optimizer AS
 SELECT
     co.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,    
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -377,15 +453,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
-
--- Guard duty findings view
+--20. Guard duty findings view
 CREATE OR REPLACE VIEW view_guard_duty_findings AS
 SELECT
     gdf.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -398,14 +477,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- KMS keys view
+--21. KMS keys view
 CREATE OR REPLACE VIEW view_kms_keys AS
 SELECT
     kk.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -418,14 +501,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- WAF rules view
+--22. WAF rules view
 CREATE OR REPLACE VIEW view_waf_rules AS
 SELECT
     wr.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
-    a.category as account_category,
+    a.category as account_category,    
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -438,14 +525,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- WAF Rules detailed view
+--23. WAF Rules detailed view
 CREATE OR REPLACE VIEW view_waf_rules_detailed AS
 SELECT
     wrd.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -458,14 +549,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- CloudTrail logs view
+--24. CloudTrail logs view
 CREATE OR REPLACE VIEW view_cloudtrail_logs AS
 SELECT
     ctl.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -478,14 +573,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Secrets manager secrets view
+--25. Secrets manager secrets view
 CREATE OR REPLACE VIEW view_secrets_manager_secrets AS
 SELECT
     sms.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -498,14 +597,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Certificates view
+--26. Certificates view
 CREATE OR REPLACE VIEW view_certificates AS
 SELECT
     c.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -518,14 +621,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Inspector findings view
+--27. Inspector findings view
 CREATE OR REPLACE VIEW view_inspector_findings AS
 SELECT
     if.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -538,14 +645,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Inventory instances view
+--28. Inventory instances view
 CREATE OR REPLACE VIEW view_inventory_instances AS
 SELECT
     ii.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -558,14 +669,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Inventory applications view
+--29. Inventory applications view
 CREATE OR REPLACE VIEW view_inventory_applications AS
 SELECT
     ia.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -579,14 +694,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Inventory patches view
+--30. Inventory patches view
 CREATE OR REPLACE VIEW view_inventory_patches AS
 SELECT
     ip.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     ii.instance_id as instance_name,
@@ -602,16 +721,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
-
-
--- Marketplace usage view
+--31. Marketplace usage view
 CREATE OR REPLACE VIEW view_marketplace_usage AS
 SELECT
     mu.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -624,14 +745,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Trusted advisor checks view
+--32. Trusted advisor checks view
 CREATE OR REPLACE VIEW view_trusted_advisor_checks AS
 SELECT
     tac.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -644,14 +769,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Health events view
+--33. Health events view
 CREATE OR REPLACE VIEW view_health_events AS
 SELECT
     he.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -664,14 +793,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Application signals view
+--34. Application signals view
 CREATE OR REPLACE VIEW view_application_signals AS
 SELECT
     as_.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -684,14 +817,18 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Resilience hub apps view
+--35. Resilience hub apps view
 CREATE OR REPLACE VIEW view_resilience_hub_apps AS
 SELECT
     rha.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
@@ -704,18 +841,21 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Summary view with product count only
+--36. Summary view with product count only
 CREATE OR REPLACE VIEW view_summary AS
 SELECT
     -- Account Identifiers
     a.id as account_id,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     a.csp as account_csp,
-    a.account_status,
 
     -- Product Count
     COALESCE(pc.number_of_products, 0) as number_of_products,
@@ -753,7 +893,6 @@ SELECT
     a.joined_method,
     a.joined_timestamp,
     EXTRACT(DAY FROM AGE(CURRENT_TIMESTAMP, a.joined_timestamp)) as account_age_days
-
 FROM accounts a
 LEFT JOIN (
     SELECT DISTINCT ON (account_id, period_granularity)
@@ -793,21 +932,22 @@ LEFT JOIN (
     FROM product_accounts
     GROUP BY account_id
 ) pc ON pc.account_id = a.id
-
 WHERE
     (cr.period_granularity IS NULL OR
      cr.period_granularity::text IN ('MONTHLY', 'WEEKLY', 'DAILY'))
-
 ORDER BY
     a.account_name,
     cr.period_start DESC;
 
--- Account summary view (CORRECTED - single version)
+--37. Account summary view (CORRECTED - single version)
 CREATE OR REPLACE VIEW view_acct_summary AS
 SELECT
     a.*,
     a.account_id as account,
+    a.region as account_region,
     a.category as account_category,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
@@ -860,19 +1000,23 @@ FROM
         GROUP BY account_id
     ) i ON i.account_id = a.id;
 
--- Product summary view with individual products
+--38. Product summary view with individual products
 CREATE OR REPLACE VIEW view_product_summary AS
 SELECT
     -- Account Identifiers
     a.id as account_id,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
+
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     a.csp as account_csp,
     a.account_type as account_type,
     a.category as account_category,
-    a.account_status,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
 
     -- Product Details
     p.id as product_id,
@@ -913,7 +1057,6 @@ SELECT
     a.joined_method,
     a.joined_timestamp,
     EXTRACT(DAY FROM AGE(CURRENT_TIMESTAMP, a.joined_timestamp)) as account_age_days
-
 FROM accounts a
 LEFT JOIN product_accounts pa ON a.id = pa.account_id
 LEFT JOIN products p ON pa.product_id = p.id
@@ -948,23 +1091,25 @@ LEFT JOIN (
     FROM security
     GROUP BY account_id
 ) sec ON sec.account_id = a.id
-
 WHERE
     (cr.period_granularity IS NULL OR
      cr.period_granularity::text IN ('MONTHLY', 'WEEKLY', 'DAILY'))
-
 ORDER BY
     a.account_name,
     p.name,
     cr.period_start DESC;
 
--- Security findings summary view
+--39. Security findings summary view
 CREATE OR REPLACE VIEW view_acct_security_findings_summary AS
 SELECT
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     s.service,
@@ -980,7 +1125,7 @@ SELECT
     0 as suppressed_count,
     0 as in_progress_count,
     s.open_findings as active_issues,
-    'N/A' as region,
+    'N/A' as region_finding,
     s.resolved_findings as resolved_count,
     CASE
         WHEN s.critical_count > 0 THEN 'CRITICAL'
@@ -1011,13 +1156,17 @@ FROM
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
 
--- Compute Optimizer View
+--40. Compute Optimizer View
 CREATE OR REPLACE VIEW view_compute_optimizer_summary AS
 SELECT
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
     CONCAT(a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name,
     co.resource_type,
@@ -1036,21 +1185,25 @@ LEFT JOIN (
     ORDER BY account_id, id
 ) pa ON a.id = pa.account_id
 LEFT JOIN products p ON pa.product_id = p.id
-GROUP BY a.account_id, a.account_name, a.account_type, a.category, p.name, co.resource_type, co.finding;
+GROUP BY a.account_id, a.region, a.account_name, a.account_type, a.category, a.account_status, a.partner_name, a.customer_name, p.name, co.resource_type, co.finding;
 
--- Create main view
-CREATE OR REPLACE VIEW view_config_inventory AS
+--41. Create a Support Tickets View
+CREATE OR REPLACE VIEW view_acct_support_tickets AS
 SELECT
-    ci.*,
+    st.*,
     a.account_id as account,
+    a.region as account_region,
     a.account_name,
     a.account_type,
     a.category as account_category,
-    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT (a.account_id, '-', a.account_name) as account_full,
     p.name as project_product_name
 FROM
-    config_inventory ci
-    JOIN accounts a ON ci.account_id = a.id
+    support_tickets st
+    JOIN accounts a ON st.account_id = a.id
     LEFT JOIN (
         SELECT DISTINCT ON (account_id) account_id, product_id
         FROM product_accounts

@@ -1,26 +1,84 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: A360 - Analytics Account, S3 Bucket, KMS, Lambda and VPC with Aurora PostgreSQL RDS and Security Groups for QuickSight
+
+Description: Multi Account Observability - Analytics Account, S3 Bucket, KMS, Lambda and VPC with Aurora PostgreSQL RDS and Security Groups for QuickSight
+
+Metadata:
+  cfn_nag:
+    rules_to_suppress:
+      - id: W11
+        reason: "AWS APIs (STS, Cost Explorer, Config, SecurityHub, etc.) don't support resource-level permissions"
+      - id: W12
+        reason: "IAM policies require wildcard for AWS service APIs without resource-level permission support"
+      - id: W13
+        reason: "Managed policies need wildcard for cross-service observability APIs"
+      - id: W89
+        reason: "Lambda uses RDS Data API over HTTPS - VPC not required"
+      - id: W92
+        reason: "Reserved concurrency already set to 10"
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Section 1: Account Configuration - These are the unique inputs needed to setup the Analytics account"
+        Parameters:
+          - S3BucketName
+          - SenderAccounts
+          - DeployEC2Receiver
+      - Label:
+          default: "Section 2: Your Account Information - This account will also be a Sender, so the below information will be used"
+        Parameters:
+          - Environment
+          - Category
+          - CustomerName
+          - PartnerName
+          - ProductName
+    ParameterLabels:
+      S3BucketName:
+        default: "1.1 S3 Bucket Name"
+      SenderAccounts:
+        default: "1.2 Sender Accounts"
+      DeployEC2Receiver:
+        default: "1.3 Deploy EC2 Receiver (with VPC Endpoints)"
+      AnalyticsKMSKey:
+        default: "Analytics KMS Key ARN"
+      Environment:
+        default: "2.1 Environment Type"
+      Category:
+        default: "2.2 Category"
+      CustomerName:
+        default: "2.3 Customer/Business Name"
+      PartnerName:
+        default: "2.4 Partner/Department Name"
+      ProductName:
+        default: "2.5 Product/Workload Name"
 
 Parameters:
   S3BucketName:
     Type: String
     Description: Name of the S3 bucket to create* only in small letters NO CAPS
-    Default: a360-data-bucket
+    Default: "e.g my-organizations-view360-bucket"
 
   SenderAccounts:
     Type: CommaDelimitedList
-    Description: List of AWS account IDs that can send data (comma-separated)
-    Default: "123456789012"
+    Description: List of AWS account IDs that can send their data to this account (comma-separated)
+    Default: "e.g 123456789012, 234567890123"
+  
+  DeployEC2Receiver:
+    Type: String
+    Default: "No"
+    AllowedValues:
+      - "Yes"
+      - "No"
+    Description: Deploy EC2 receiver with VPC endpoints? Choose 'Yes' for EC2 implementation, 'No' for Lambda-only implementation
   
   CustomerName:
     Type: String
     Default: "None"
-    Description: Customer name for the account
+    Description: Customer name for external accounts or Business Unit name for internal accounts
     
   PartnerName:
     Type: String
     Default: "None"
-    Description: Partner name for the account
+    Description: Specify the managing partner name for externally managed accounts or the department name for internal business unit accounts
   
   Environment:
     Type: String
@@ -32,7 +90,7 @@ Parameters:
       - "TEST"
       - "UAT"
       - "DEVELOPMENT"
-    Description: Environment type for the account
+    Description: Environment type for the account, whether it is a Production, Staging, Test, UAT or Development
   
   Category:
     Type: String
@@ -44,6 +102,14 @@ Parameters:
       - "Intranet"
     Description: Classify whether the account is facing the Internet, Intranet or Both
 
+  ProductName:
+    Type: String
+    Default: "None"
+    Description: Name of the Product/Workload/Application that is currently running in this account. If there are multiple of them split them by comma's (,). e.g Product A, Product B
+
+Conditions:
+  DeployEC2Resources: !Equals [!Ref DeployEC2Receiver, "Yes"]
+  
 Resources:
   # KMS Key for encryption
   A360KMSKey:
@@ -165,6 +231,13 @@ Resources:
   # Security Groups with descriptions
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W2
+            reason: "RDS requires VPC-wide access for Lambda and EC2"
+          - id: W9
+            reason: "VPC CIDR required for internal communication"
     Properties:
       GroupDescription: Security group for RDS Aurora PostgreSQL
       VpcId: !Ref VPC
@@ -196,6 +269,17 @@ Resources:
 
   QuickSightSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W2
+            reason: "QuickSight service requires broad ingress"
+          - id: W5
+            reason: "QuickSight requires egress to AWS services"
+          - id: W9
+            reason: "VPC CIDR required for QuickSight connectivity"
+          - id: W40
+            reason: "QuickSight VPC endpoint requires all protocols"
     Properties:
       GroupDescription: Security group for QuickSight VPC endpoint
       VpcId: !Ref VPC
@@ -217,9 +301,22 @@ Resources:
 
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: "Lambda requires HTTPS egress to AWS APIs"
+          - id: W9
+            reason: "VPC CIDR required for internal communication"
     Properties:
       GroupDescription: Security group for Lambda functions
       VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16
+          Description: Allow HTTPS from VPC for SSM endpoints
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 443
@@ -310,7 +407,7 @@ Resources:
     Properties:
       # Removed DBClusterIdentifier to allow CloudFormation to generate a name
       Engine: aurora-postgresql
-      EngineVersion: '15.12'
+      EngineVersion: '17.4'
       Port: 5432
       DatabaseName: core
       MasterUsername: postgres
@@ -346,6 +443,15 @@ Resources:
   # IAM Managed Policies with constrained permissions
   A360ReceiverPolicy:
     Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "AWS service APIs require wildcard resources"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "Multi-service data processing requires wildcard for AWS APIs"
     Properties:
       # Removed ManagedPolicyName to allow CloudFormation to generate a name
       Description: Policy for A360 Receiver Lambda function
@@ -417,9 +523,24 @@ Resources:
             Action:
               - sqs:SendMessage
             Resource: !GetAtt LambdaDLQ.Arn
+          - Sid: SSMAccess
+            Effect: Allow
+            Action:
+              - ssm:SendCommand
+              - ssm:GetCommandInvocation
+            Resource: "*"
 
   A360SenderPolicy:
     Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Multi-service data collection requires wildcard"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "Multi-service data collection requires wildcard for AWS APIs"
     Properties:
       Description: Policy for A360 Sender Lambda function
       PolicyDocument:
@@ -483,6 +604,10 @@ Resources:
               - config:DescribeConfigurationRecorderStatus
               - config:DescribeConfigRules
               - config:GetComplianceDetailsByConfigRule
+              - config:DescribeComplianceByConfigRule
+              - config:DescribeConformancePacks
+              - config:DescribeConformancePackStatus
+              - config:GetConformancePackComplianceDetails
             Resource: "*"
           - Sid: SecurityHubAccess
             Effect: Allow
@@ -578,6 +703,7 @@ Resources:
             Action:
               - support:DescribeTrustedAdvisorChecks
               - support:DescribeTrustedAdvisorCheckResult
+              - support:DescribeCases
             Resource: "*"
           - Sid: ApplicationSignalsAccess
             Effect: Allow
@@ -668,6 +794,15 @@ Resources:
 
   A360QuicksightVpcPolicy:
     Type: AWS::IAM::Policy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: "QuickSight VPC operations require wildcard resources"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "QuickSight VPC operations require wildcard resources"
     Properties:
       PolicyName: A360QuicksightVpcPolicy
       Roles:
@@ -702,10 +837,13 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: lambda.amazonaws.com
+              Service: 
+                - lambda.amazonaws.com
+                - ec2.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
         - !Ref A360ReceiverPolicy
 
   A360LambdaSenderRole:
@@ -734,6 +872,15 @@ Resources:
   # S3 Access Logs Bucket
   S3AccessLogsBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "This bucket is used as target for access logs - should not have server access logging enabled"
+      checkov:
+        skip:
+          - id: "CKV_AWS_18"
+            comment: "This is the access logs bucket - cannot log to itself"
     Properties:
       # Removed BucketName to allow CloudFormation to generate a name
       BucketName: !Sub "${S3BucketName}-${AWS::AccountId}-logs"
@@ -742,6 +889,8 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: aws:kms
               KMSMasterKeyID: !Ref A360KMSKey
+      VersioningConfiguration:
+        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -785,6 +934,15 @@ Resources:
   # Lambda Functions with VPC and DLQ configuration
   A360ReceiverFunction:
     Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda uses RDS Data API over HTTPS - VPC not required"
+      checkov:
+        skip:
+          - id: "CKV_AWS_117"
+            comment: "Lambda uses RDS Data API - VPC not required"
     Properties:
       # Removed FunctionName to allow CloudFormation to generate a name
       Runtime: python3.13
@@ -843,6 +1001,15 @@ Resources:
 
   A360SenderFunction:
     Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Sender doesn't require VPC for S3/API access"
+      checkov:
+        skip:
+          - id: "CKV_AWS_117"
+            comment: "Sender doesn't require VPC for S3/API access"
     Properties:
       # Removed FunctionName to allow CloudFormation to generate a name
       Runtime: python3.13
@@ -863,6 +1030,7 @@ Resources:
           PARTNER: !Ref PartnerName
           CATEGORY: !Ref Category
           ENVIRONMENT: !Ref Environment
+          PRODUCT: !Ref ProductName
       KmsKeyArn: !GetAtt A360KMSKey.Arn
       Code:
         ZipFile: |
@@ -900,6 +1068,48 @@ Resources:
                   return result
               finally:
                   os.unlink(temp_file_path)
+
+  # Lambda to trigger EC2 via SSM on S3 events
+  A360EC2TriggerFunction:
+    Type: AWS::Lambda::Function
+    Condition: DeployEC2Resources
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Trigger function only invokes SSM - no VPC needed"
+          - id: W92
+            reason: "Simple trigger function doesn't need concurrency limits"
+    Properties:
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt A360LambdaReceiverRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: !Sub |
+          import boto3
+          
+          def lambda_handler(event, context):
+              ssm = boto3.client('ssm')
+              ssm.send_command(
+                  InstanceIds=['${A360ReceiverEC2}'],
+                  DocumentName='AWS-RunShellScript',
+                  Parameters={'commands': ['. /etc/profile.d/a360.sh','/usr/bin/python3 /opt/a360/run.py']}
+              )
+              return {'statusCode': 200}
+      Tags:
+        - Key: Name
+          Value: A360-EC2-Trigger
+
+  # Permission for S3 to invoke EC2 Trigger Lambda
+  A360EC2TriggerLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: DeployEC2Resources
+    Properties:
+      FunctionName: !Ref A360EC2TriggerFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt S3Bucket.Arn
 
   # EventBridge Rule for Sender (Daily at 2 AM)
   SenderScheduleRule:
@@ -1007,10 +1217,261 @@ Resources:
               Bool:
                 "aws:SecureTransport": "true"
 
+  # S3 Access Logs Bucket Policy - HTTPS Only
+  S3AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3AccessLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "DenyInsecureConnections"
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt S3AccessLogsBucket.Arn
+              - !Sub "${S3AccessLogsBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # EC2 Instance Profile
+  A360EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: DeployEC2Resources
+    Properties:
+      Roles:
+        - !Ref A360LambdaReceiverRole
+
+  # EC2 Security Group
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: DeployEC2Resources
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: "EC2 receiver requires HTTPS egress to AWS APIs"
+          - id: W36
+            reason: "Egress rules are self-documenting for AWS API access"
+    Properties:
+      GroupDescription: Security group for A360 EC2 receiver
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: A360-EC2-SG
+
+  # EC2 Adding this as an option to run the receiver function
+  A360ReceiverEC2:
+    Type: AWS::EC2::Instance
+    Condition: DeployEC2Resources
+    Properties:
+      InstanceType: t4g.small
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
+      IamInstanceProfile: !Ref A360EC2InstanceProfile
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y python3-boto3 cronie
+          
+          systemctl enable crond
+          systemctl start crond
+          
+          mkdir -p /opt/a360
+
+          cat > /etc/profile.d/a360.sh << 'EOF'
+          export REGION="${AWS::Region}"
+          export BUCKET="${S3Bucket}"
+          export DB_NAME="core"
+          export AURORA_CLUSTER_ARN="arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
+          export AURORA_SECRET_ARN="${AuroraDBCluster.MasterUserSecret.SecretArn}"
+          export ANALYTICS_KMS_KEY="${A360KMSKey.Arn}"
+          EOF
+          
+          cat > /opt/a360/run.py << 'EOF'
+          #!/usr/bin/env python3
+          import boto3, tempfile, importlib.util, sys, os
+          def main():
+              bucket = os.environ.get('BUCKET')
+              if not bucket:
+                  print("ERROR: BUCKET environment variable not set")
+                  sys.exit(1)
+              s3 = boto3.client('s3')
+              response = s3.get_object(Bucket=bucket, Key='scripts/receiver.py')
+              script_content = response['Body'].read().decode('utf-8')
+              with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                  f.write(script_content)
+                  temp_path = f.name
+              try:
+                  spec = importlib.util.spec_from_file_location("receiver", temp_path)
+                  module = importlib.util.module_from_spec(spec)
+                  spec.loader.exec_module(module)
+                  module.lambda_handler({}, None)
+              finally:
+                  os.unlink(temp_path)
+          if __name__ == '__main__':
+              main()
+          EOF
+          
+          chmod +x /opt/a360/run.py
+          echo "0 3 * * * . /etc/profile.d/a360.sh && /usr/bin/python3 /opt/a360/run.py >> /var/log/receiver.log 2>&1" | crontab -
+      Tags:
+        - Key: Name
+          Value: A360-Receiver-EC2
+        - Key: Version
+          Value: "1"
+
+  # SSM VPC Endpoints for private subnet access
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ec2messages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  RDSDataEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.rds-data
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+
+  STSEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: DeployEC2Resources
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.sts
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+  
 Outputs:
+  Region:
+    Description: Region of this implementation
+    Value: !Ref AWS::Region
+    Export:
+      Name: !Sub "${AWS::StackName}-Region"
+
+  AccountId:
+    Description: AWS Account ID
+    Value: !Ref AWS::AccountId
+    Export:
+      Name: !Sub "${AWS::StackName}-AccountId"
+
+  S3BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketName"
+
+  KMSKeyArn:
+    Description: KMS Key ARN for encryption
+    Value: !GetAtt A360KMSKey.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-KMSKeyArn"
+
+  AuroraSecretArn:
+    Description: Aurora master password secret ARN
+    Value: !GetAtt AuroraDBCluster.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub "${AWS::StackName}-AuroraSecretArn"
+
+  AuroraClusterArn:
+    Description: Aurora PostgreSQL Cluster ARN
+    Value: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
+    Export:
+      Name: !Sub "${AWS::StackName}-AuroraClusterArn"
+    
+  AuroraEndpoint:
+    Description: Aurora PostgreSQL Cluster Endpoint
+    Value: !GetAtt AuroraDBCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-AuroraEndpoint"
+
   VPCId:
     Description: VPC ID
     Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCId"
     
   QuickSightVPCEndpointId:
     Description: QuickSight VPC Endpoint ID
@@ -1019,22 +1480,6 @@ Outputs:
   QuickSightSecurityGroup:
     Description: QuickSight VPC Security Group
     Value: !Ref QuickSightSecurityGroup
-
-  AuroraClusterArn:
-    Description: Aurora PostgreSQL Cluster ARN
-    Value: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraDBCluster}"
-
-  AuroraEndpoint:
-    Description: Aurora PostgreSQL Cluster Endpoint
-    Value: !GetAtt AuroraDBCluster.Endpoint.Address
-
-  AuroraSecretArn:
-    Description: Aurora master password secret ARN
-    Value: !GetAtt AuroraDBCluster.MasterUserSecret.SecretArn
-
-  KMSKeyArn:
-    Description: KMS Key ARN for encryption
-    Value: !GetAtt A360KMSKey.Arn
 
   DLQArn:
     Description: Dead Letter Queue ARN
@@ -1047,7 +1492,11 @@ Outputs:
   SenderLambdaFunctionArn:
     Description: Sender Lambda Function ARN
     Value: !GetAtt A360SenderFunction.Arn
+  
+  ReceiverEC2InstanceId:
+    Description: EC2 Receiver Instance ID
+    Value: !If [DeployEC2Resources, !Ref A360ReceiverEC2, "Not Deployed"]
 
-  S3BucketName:
-    Description: S3 Bucket Name
-    Value: !Ref S3Bucket
+  EC2TriggerLambdaArn:
+    Description: EC2 Trigger Lambda Function ARN
+    Value: !If [DeployEC2Resources, !GetAtt A360EC2TriggerFunction.Arn, "Not Deployed"]

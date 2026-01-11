@@ -1,26 +1,28 @@
 -- Create the main accounts table
 CREATE TABLE accounts (
     id SERIAL PRIMARY KEY,
-    account_id VARCHAR(12) NOT NULL UNIQUE,
+    account_id VARCHAR(12) NOT NULL,
     account_name VARCHAR(255) NOT NULL,
     account_email VARCHAR(255) NOT NULL,
     account_status VARCHAR(50) NOT NULL,
     account_arn VARCHAR(255) NOT NULL,
-    partner_name  TEXT DEFAULT 'None',
-    customer_name  TEXT DEFAULT 'None',
+    partner_name TEXT DEFAULT 'None',
+    customer_name TEXT DEFAULT 'None',
     joined_method VARCHAR(50) NOT NULL,
     joined_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     account_type VARCHAR(50),
     csp VARCHAR(50),
+    region TEXT DEFAULT 'Global',
     category TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, region)
 );
 
 -- Create the contact_info table
 CREATE TABLE contact_info (
     id SERIAL PRIMARY KEY,
-    account_id VARCHAR(12) REFERENCES accounts(account_id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     address_line1 VARCHAR(255),
     address_line2 VARCHAR(255),
     address_line3 VARCHAR(255),
@@ -40,8 +42,8 @@ CREATE TABLE contact_info (
 -- Create the alternate_contacts table
 CREATE TABLE alternate_contacts (
     id SERIAL PRIMARY KEY,
-    account_id VARCHAR(12) REFERENCES accounts(account_id) ON DELETE CASCADE,
-    contact_type VARCHAR(50) NOT NULL,  -- 'billing', 'operations', 'security'
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    contact_type VARCHAR(50) NOT NULL,
     full_name VARCHAR(255),
     title VARCHAR(255),
     email VARCHAR(255),
@@ -50,6 +52,7 @@ CREATE TABLE alternate_contacts (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account_id, contact_type)
 );
+
 
 
 
@@ -69,7 +72,7 @@ CREATE TABLE services (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT date_check CHECK (date_to >= date_from),
-    UNIQUE (account_id, service, date_from)
+    UNIQUE (account_id, service, usage_types, date_from)
 );
 
 
@@ -240,7 +243,11 @@ CREATE TABLE non_compliant_resources (
     resource_id VARCHAR(255),
     compliance_type VARCHAR(50),
     rule_name VARCHAR(255),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    annotation TEXT,
+    evaluation_mode TEXT,
+    conformance_pack TEXT,
+    status VARCHAR(255) NOT NULL DEFAULT 'OPEN'
 );
 
 -- Create new service_resources table
@@ -495,6 +502,12 @@ CREATE TABLE inventory_instances (
     last_ping_date_time TIMESTAMP WITH TIME ZONE,
     agent_version VARCHAR(50),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    platform_type VARCHAR(255),
+    platform_version VARCHAR(50),
+    is_latest_version BOOLEAN,
+    association_status VARCHAR(255),
+    association_execution_date TIMESTAMP WITH TIME ZONE,
+    association_success_date TIMESTAMP WITH TIME ZONE,
     UNIQUE (instance_id)
 );
 
@@ -597,7 +610,27 @@ CREATE TABLE resilience_hub_apps (
     UNIQUE (app_arn)
 );
 
-
+-- Support Tickets-- Create the support_tickets table
+CREATE TABLE support_tickets (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    case_id VARCHAR(255) NOT NULL,
+    display_id VARCHAR(50) NOT NULL,
+    subject TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    severity_code VARCHAR(50) NOT NULL,
+    service_code VARCHAR(255),
+    category_code VARCHAR(50) NOT NULL,
+    time_created TIMESTAMP WITH TIME ZONE NOT NULL,
+    submitted_by VARCHAR(255),
+    language VARCHAR(10) DEFAULT 'en',
+    date_from DATE NOT NULL,
+    date_to DATE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (case_id),
+    CONSTRAINT date_check CHECK (date_to >= date_from)
+);
 
 /* Set Indexes */
 
@@ -655,3 +688,7 @@ CREATE INDEX idx_health_events_account_id ON health_events(account_id);
 CREATE INDEX idx_application_signals_account_id ON application_signals(account_id);
 CREATE INDEX idx_resilience_hub_apps_account_id ON resilience_hub_apps(account_id);
 
+-- Create index for Support Tickets
+CREATE INDEX idx_support_tickets_account_time ON support_tickets(account_id, time_created);
+CREATE INDEX idx_support_tickets_status ON support_tickets(status);
+CREATE INDEX idx_support_tickets_severity ON support_tickets(severity_code);

@@ -1,3 +1,7 @@
+"""ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
+""" from dotenv import load_dotenv, dotenv_values
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -10,6 +14,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union, Any
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from datetime import datetime, timedelta, timezone
 
 from calendar import monthrange
@@ -17,14 +22,16 @@ from enum import Enum
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
 """ GLOBAL VARIABLES """
-REGION      = os.environ.get("REGION", "ap-southeast-1")
+REGION      = os.environ.get("REGION", "us-east-1") #boto3.client('sts').meta.region_name
 BUCKET      = os.environ.get("BUCKET")
 KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
 CUSTOMER    = os.environ.get("CUSTOMER", None)
 PARTNER     = os.environ.get("PARTNER", None)
 CATEGORY    = os.environ.get("CATEGORY", None)
 ENVIRONMENT = os.environ.get("ENVIRONMENT", None)
+PRODUCT     = os.environ.get("PRODUCT", None)
 
 SUCCESS     = "🟢"  
 FAIL        = "🟡"  
@@ -35,17 +42,17 @@ CALENDAR    = "📅"
 
 """ HELPER CLASSES """
 class DateTimeEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        return super().default(obj)
+    def default(self, o):
+        if isinstance(o, datetime):
+            return o.isoformat()
+        return super().default(o)
 
 def upload_to_s3(account, data, interval, end_date):
 
     end_date    = datetime.now(timezone.utc) if not end_date else end_date
     s3          = boto3.client('s3')
     timestamp   = end_date.strftime("%H%M%S")
-    filename    = f'data/{account}/{end_date.year}-{end_date.month:02d}-{end_date.day:02d}_{interval}.json'
+    filename    = f'data/{account}/{REGION}/{end_date.year}-{end_date.month:02d}-{end_date.day:02d}_{interval}.json'
     
     try:
         # Check if data is None and handle it
@@ -55,6 +62,10 @@ def upload_to_s3(account, data, interval, end_date):
         
         # Convert data to JSON string with datetime handling
         json_data = json.dumps(data, indent=4, cls=DateTimeEncoder)
+        
+        # Calculate file size
+        file_size_bytes = len(json_data.encode('utf-8'))
+        file_size_mb = round(file_size_bytes / (1024 * 1024), 2)
 
         # Upload to S3 with KMS encryption
         put_params = {'Bucket': BUCKET, 'Key': filename, 'Body': json_data}
@@ -68,19 +79,19 @@ def upload_to_s3(account, data, interval, end_date):
         result = {
             "path": f"s3://{BUCKET}/{filename}",
             "date_added": str(end_date.date()),
-            "account": account
+            "account": account,
+            "size": f"{file_size_mb} MB"
         }
         
         return result
     
     except Exception as e:
         print(f"\n✗ Error writing to S3: {str(e)}")
-        # Return a minimal result instead of None to avoid further errors
         return {
-            "path": None,
+            "path"      : None,
             "date_added": str(end_date.date()) if end_date else None,
-            "account": account,
-            "error": str(e)
+            "account"   : account,
+            "error"     : str(e)
         }
 
 """  1. AWS RESPONSE MANAGER """
@@ -102,7 +113,7 @@ class AWSResourceData:
     compute_optimizer	: List[Dict[str, Any]]  = field(default_factory=list)
     service_resources	: List[Dict[str, Any]]  = field(default_factory=list)
     config_inventory	: List[Dict[str, Any]]  = field(default_factory=list)
-    resilience_hub	    : List[Dict[str, Any]]  = field(default_factory=list)
+    support_tickets	    : List[Dict[str, Any]]  = field(default_factory=list)
     logs			    : Dict[str, Any]        = field(default_factory=dict)
 
 class AWSResourceType(str, Enum):
@@ -120,6 +131,7 @@ class AWSResourceType(str, Enum):
     COMPUTE_OPTIMIZER   = "compute_optimizer"
     CONFIG_INVENTORY    = "config_inventory"
     SERVICE_RESOURCES   = "service_resources"
+    SUPPORT_TICKETS     = "support_tickets"
     LOGS                = "logs"
 
 # b. AWS Resource Interface - To ensure the data format is strictly governed
@@ -127,13 +139,12 @@ class AWSResourceInterface:
     def __init__(self):
         self.data = AWSResourceData()
 
-    def set_data(self, attr: AWSResourceType, data: Dict[str, Any]):
+    def set_data(self, attr: AWSResourceType, data: Union[Dict[str, Any], List[Dict[str, Any]]]):
         current_attr = getattr(self.data, attr.value)
         if isinstance(data, list):
             current_attr.extend(data)
         else:
             setattr(self.data, attr.value, data)
-
 
     def get_all_data(self) -> Dict[str, Any]:
         """Get all data in the specified format"""
@@ -152,6 +163,7 @@ class AWSResourceInterface:
             "service_resources"	: self.data.service_resources,
             "compute_optimizer"	: self.data.compute_optimizer,
             "config_inventory"	: self.data.config_inventory,
+            "support_tickets"	: self.data.support_tickets,
             "logs"				: self.data.logs
         }
 
@@ -181,13 +193,14 @@ class AWSResponse:
 """ 2. TEST PERMISSIONS FOR AWS SERVICES """
 class AWSBoto3Permissions:
     def __init__(self, params=None):
+        self.boto3_config   = Config(connect_timeout=5,read_timeout=10,retries={'max_attempts': 2})
         # Get current date and 30 days ago for CE
         self.end_date 		= datetime.now(timezone.utc)
         self.start_date 	= self.end_date - timedelta(days=30)
         self.aws_services 	= {
             "sts": {
                 "name": "STS",
-                "client": boto3.client("sts"),
+                "client": boto3.client("sts", region_name=REGION, config=self.boto3_config),
                 "action": "get_caller_identity",
                 "params": params,
                 "status": False,
@@ -195,7 +208,7 @@ class AWSBoto3Permissions:
             },
             "account_contact": {
                 "name": "Account Contact",
-                "client": boto3.client("account"),
+                "client": boto3.client("account", region_name=REGION, config=self.boto3_config),
                 "action": "get_contact_information",
                 "params": params,
                 "status": False,
@@ -203,7 +216,7 @@ class AWSBoto3Permissions:
             },
             "account": {
                 "name": "Account",
-                "client": boto3.client("account"),
+                "client": boto3.client("account", region_name=REGION, config=self.boto3_config),
                 "action": "get_account_information",
                 "params": params,
                 "status": False,
@@ -211,7 +224,7 @@ class AWSBoto3Permissions:
             },
             "ce": {
                 "name": "Cost Explorer",
-                "client": boto3.client("ce"),
+                "client": boto3.client("ce", config=self.boto3_config),
                 "action": "get_cost_and_usage",
                 "params": {
                     "TimePeriod": {
@@ -227,7 +240,7 @@ class AWSBoto3Permissions:
             },
             "securityhub": {
                 "name": "Security Hub",
-                "client": boto3.client("securityhub", region_name=REGION),
+                "client": boto3.client("securityhub", region_name=REGION, config=self.boto3_config),
                 "action": "describe_hub",
                 "params": params,
                 "status": False,
@@ -235,7 +248,7 @@ class AWSBoto3Permissions:
             },
             "resiliencehub": {
                 "name": "Resilience Hub",
-                "client": boto3.client("resiliencehub", region_name=REGION),
+                "client": boto3.client("resiliencehub", region_name=REGION, config=self.boto3_config),
                 "action": "list_apps",
                 "params": params,
                 "status": False,
@@ -243,7 +256,7 @@ class AWSBoto3Permissions:
             },
             "config": {
                 "name": "AWS Config",
-                "client": boto3.client("config", region_name=REGION),
+                "client": boto3.client("config", region_name=REGION, config=self.boto3_config),
                 "action": "describe_configuration_recorders",
                 "params": params,
                 "status": False,
@@ -251,7 +264,7 @@ class AWSBoto3Permissions:
             },
             "iam": {
                 "name": "IAM",
-                "client": boto3.client("iam"),
+                "client": boto3.client("iam", config=self.boto3_config),
                 "action": "list_users",
                 "params": params,
                 "status": False,
@@ -259,7 +272,7 @@ class AWSBoto3Permissions:
             },
             "ec2": {
                 "name": "EC2",
-                "client": boto3.client("ec2", region_name=REGION),
+                "client": boto3.client("ec2", region_name=REGION, config=self.boto3_config),
                 "action": "describe_regions",
                 "params": params,
                 "status": False,
@@ -267,7 +280,7 @@ class AWSBoto3Permissions:
             },
             "application-signals": {
                 "name": "Application Signals",
-                "client": boto3.client("application-signals", region_name=REGION),
+                "client": boto3.client("application-signals", region_name=REGION, config=self.boto3_config),
                 "action": "close",
                 "params": params,
                 "status": False,
@@ -275,7 +288,7 @@ class AWSBoto3Permissions:
             },
             "ssm": {
                 "name": "Systems Manager",
-                "client": boto3.client("ssm", region_name=REGION),
+                "client": boto3.client("ssm", region_name=REGION, config=self.boto3_config),
                 "action": "describe_instance_information",
                 "params": params,
                 "status": False,
@@ -283,7 +296,7 @@ class AWSBoto3Permissions:
             },
             "inspector2": {
                 "name": "Inspector",
-                "client": boto3.client("inspector2", region_name=REGION),
+                "client": boto3.client("inspector2", region_name=REGION, config=self.boto3_config),
                 "action": "list_findings",
                 "params": {},
                 "status": False,
@@ -291,7 +304,7 @@ class AWSBoto3Permissions:
             },
             "wafv2": {
                 "name": "WAF v2",
-                "client": boto3.client("wafv2", region_name=REGION),
+                "client": boto3.client("wafv2", region_name=REGION, config=self.boto3_config),
                 "action": "list_web_acls",
                 "params": {"Scope": "REGIONAL"},
                 "status": False,
@@ -299,7 +312,7 @@ class AWSBoto3Permissions:
             },
             "rds": {
                 "name": "RDS",
-                "client": boto3.client("rds", region_name=REGION),
+                "client": boto3.client("rds", region_name=REGION, config=self.boto3_config),
                 "action": "describe_db_instances",
                 "params": params,
                 "status": False,
@@ -307,7 +320,7 @@ class AWSBoto3Permissions:
             },
             "s3": {
                 "name": "S3",
-                "client": boto3.client("s3", region_name=REGION),
+                "client": boto3.client("s3", region_name=REGION, config=self.boto3_config),
                 "action": "list_buckets",
                 "params": params,
                 "status": False,
@@ -315,7 +328,7 @@ class AWSBoto3Permissions:
             },
             "elbv2": {
                 "name": "ELB v2",
-                "client": boto3.client("elbv2", region_name=REGION),
+                "client": boto3.client("elbv2", region_name=REGION, config=self.boto3_config),
                 "action": "describe_load_balancers",
                 "params": params,
                 "status": False,
@@ -323,7 +336,7 @@ class AWSBoto3Permissions:
             },
             "autoscaling": {
                 "name": "Auto Scaling",
-                "client": boto3.client("autoscaling", region_name=REGION),
+                "client": boto3.client("autoscaling", region_name=REGION, config=self.boto3_config),
                 "action": "describe_auto_scaling_groups",
                 "params": params,
                 "status": False,
@@ -331,7 +344,7 @@ class AWSBoto3Permissions:
             },
             "lambda": {
                 "name": "Lambda",
-                "client": boto3.client("lambda", region_name=REGION),
+                "client": boto3.client("lambda", region_name=REGION, config=self.boto3_config),
                 "action": "list_functions",
                 "params": params,
                 "status": False,
@@ -339,24 +352,39 @@ class AWSBoto3Permissions:
             },
             "compute-optimizer": {
                 "name": "Compute Optimizer",
-                "client": boto3.client("compute-optimizer", region_name=REGION),
+                "client": boto3.client("compute-optimizer", region_name=REGION, config=self.boto3_config),
                 "action": "get_ec2_instance_recommendations",
                 "params": params,
                 "status": False,
                 "reqd"  : False
             },
+            "support": {
+                "name": "Trusted Advisor & Support Tickets",
+                "client": boto3.client("support", region_name="us-east-1", config=self.boto3_config),
+                "action": "describe_trusted_advisor_checks",
+                "params": {'language':'en'},
+                "status": False,
+                "reqd"  : False
+            },
+            "health": {
+                "name": "AWS Health",
+                "client": boto3.client("health", region_name="us-east-1", config=self.boto3_config),
+                "action": "describe_events",
+                "params": params,
+                "status": False,
+                "reqd"  : False
+            }            
         }
 
     def _is_optional(self, reqd):
         if not reqd:
-            return "Optional"
+            return "O"
         else:
-            return "Required"   
+            return "M"
 
     def _check(self, service):
+        is_opt = self._is_optional(service["reqd"])
         try:
-            is_opt = self._is_optional(service["reqd"])
-            
             if service["params"]:
                 service["client"].__getattribute__(service["action"])(
                     **service["params"]
@@ -364,16 +392,18 @@ class AWSBoto3Permissions:
             else:
                 service["client"].__getattribute__(service["action"])()
             service["status"] = True
-            print(f"{SUCCESS} Connected to {service['name']} ({is_opt})")
+            print(f"{SUCCESS} [{is_opt}] Connected to {service['name']}")
         except ClientError as e:
-            print(f"{FAIL} Not Connected to {service['name']} ({is_opt}): {str(e)}")
+            print(f"{FAIL} [{is_opt}] Not Connected to {service['name']}: {str(e)}")
             service["status"] = False
         except Exception as e:
-            print(f"{ERROR} Error testing {service['name']} ({is_opt}): {str(e)}")
+            print(f"{ERROR} [{is_opt}] Error testing {service['name']}: {str(e)}")
             service["status"] = None
 
     def test(self):
         print("Testing Connectivity to AWS Service Clients")
+        print("*" * 43)
+        print("Key: [M]-Mandatory, [O]-Optional")
         print("*" * 43)
         
         print(f"{INFO} Version Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
@@ -432,6 +462,7 @@ class AWSResourceManager:
                                 "compute_optimizer_status"  : "Pass",
                                 "service_resources_status"  : "Pass",
                                 "config_inventory_status"   : "Pass",
+                                "support_tickets_status"    : "Pass",
                                 'message'			        : []
                             }
         # Default to 1 days ago since that's the maximum for detailed data
@@ -475,15 +506,14 @@ class AWSResourceManager:
 
     def _get_timezone_aware_dates(self):
         """Helper method to get timezone-aware start and end dates"""
-        from datetime import timezone
         
         # Ensure dates are set
         if not self.start_date or not self.end_date:
             self.get_date()
         
         # Make dates timezone-aware for comparison
-        start_date_aware = self.start_date.replace(tzinfo=timezone.utc) if self.start_date.tzinfo is None else self.start_date
-        end_date_aware = self.end_date.replace(tzinfo=timezone.utc) if self.end_date.tzinfo is None else self.end_date
+        start_date_aware = self.start_date.replace(tzinfo=timezone.utc) if self.start_date and self.start_date.tzinfo is None else self.start_date
+        end_date_aware = self.end_date.replace(tzinfo=timezone.utc) if self.end_date and self.end_date.tzinfo is None else self.end_date
         
         return start_date_aware, end_date_aware
 
@@ -518,26 +548,28 @@ class AWSResourceManager:
         account_id  = identity.data.get('Account')
 
         result = {
-            'account_id': self.account_id,
-            'account_name': acc.data.get("AccountName") if acc is not None else account_id,
-            'account_email': None,
-            'account_status': "ACTIVE",
-            'account_arn': None,
-            'partner_name': PARTNER if PARTNER else 'None',
-            'customer_name': CUSTOMER if CUSTOMER else 'None',
-            'category': CATEGORY if CATEGORY else 'None',
-            'account_type': ENVIRONMENT if ENVIRONMENT else 'None',
-            'joined_method': None,
-            'joined_timestamp': acc.data.get("AccountCreatedDate") if acc is not None else None,
-            'contact_info': {},
+            'account_id'        : self.account_id,
+            'account_name'      : acc.data.get("AccountName") if acc is not None else account_id,
+            'account_email'     : None,
+            'account_status'    : "ACTIVE",
+            'account_arn'       : None,
+            'partner_name'      : PARTNER if PARTNER else 'None',
+            'customer_name'     : CUSTOMER if CUSTOMER else 'None',
+            'category'          : CATEGORY if CATEGORY else 'None',
+            'account_type'      : ENVIRONMENT if ENVIRONMENT else 'None',
+            'joined_method'     : None,
+            'joined_timestamp'  : acc.data.get("AccountCreatedDate") if acc is not None else None,
+            'region'            : REGION,
+            'product'           : PRODUCT if PRODUCT else 'None',
+            'contact_info'      : {},
             'alternate_contacts': {}
         }
 
         # Get Contact Information
         try:
-            contact_info = AWSResponse(account_client.get_contact_information())
-            contact_data = contact_info.data.get('ContactInformation', {})
-            result['contact_info'] = {field: contact_data.get(key) for field, key in [
+            contact_info            = AWSResponse(account_client.get_contact_information())
+            contact_data            = contact_info.data.get('ContactInformation', {})
+            result['contact_info']  = {field: contact_data.get(key) for field, key in [
                 ('address_line1', 'AddressLine1'), ('address_line2', 'AddressLine2'),
                 ('address_line3', 'AddressLine3'), ('city', 'City'),
                 ('country_code', 'CountryCode'), ('postal_code', 'PostalCode'),
@@ -552,8 +584,9 @@ class AWSResourceManager:
         try:
             for contact_type in ['BILLING', 'OPERATIONS', 'SECURITY']:
                 try:
-                    alternate_contact = AWSResponse(account_client.get_alternate_contact(AlternateContactType=contact_type))
-                    contact_data = alternate_contact.data.get('AlternateContact', {})
+                    alternate_contact   = AWSResponse(account_client.get_alternate_contact(AlternateContactType=contact_type))
+                    contact_data        = alternate_contact.data.get('AlternateContact', {})
+
                     result['alternate_contacts'][contact_type.lower()] = {
                         'name': contact_data.get('Name'),
                         'title': contact_data.get('Title'),
@@ -577,30 +610,34 @@ class AWSResourceManager:
                 return None
                 
             response = AWSResponse(boto3.client('ce').get_cost_and_usage(
-                TimePeriod  =   {'Start': self.start_date.strftime('%Y-%m-%d'), 'End': self.end_date.strftime('%Y-%m-%d')},
+                TimePeriod  =   {'Start': self.start_date.strftime('%Y-%m-%d') if self.start_date else '', 'End': self.end_date.strftime('%Y-%m-%d') if self.end_date else ''},
                 Granularity =   self.interval,
-                Metrics     =   ['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost', 'UsageQuantity'],
-                GroupBy     =   [{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
+                Metrics     =   ['UnblendedCost'], #REMOVED ['BlendedCost', 'NetUnblendedCost', 'AmortizedCost', 'UsageQuantity'] # NOT USED
+                GroupBy     =   [{'Type': 'DIMENSION', 'Key': 'SERVICE'}], #REMOVED {'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'} #this gives too much data
                 Filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
             ))
 
             result_data = []
+
             for result in response.data.get('ResultsByTime', []):
                 time_period = result['TimePeriod']
                 for group in result.get('Groups', []):
-                    service = group['Keys'][0]
-                    metrics = group['Metrics']
-                    unblended = float(metrics['UnblendedCost']['Amount'])
-                    utilization = float(metrics['UsageQuantity']['Amount']) or None
+                    service             = group['Keys'][0]
+                    usage_type          = "Aggregated" #REMOVED: Detailed Datasets, Customer can opt to switch on #group['Keys'][1]
+                    metrics             = group['Metrics']
+                    unblended           = float(metrics['UnblendedCost']['Amount'])
+                    utilization         = None #REMOVED: Detailed Datasets, Customer can opt to switch on #float(metrics['UsageQuantity']['Amount']) or None
+                    utilization_unit    = None #REMOVED: Detailed Datasets, Customer can opt to switch on #str(metrics['UsageQuantity']['Unit']) or None
                     
                     result_data.append({
                         'service'               : service,
+                        'usage_types'           : usage_type,
                         'date_from'             : time_period['Start'],
                         'date_to'               : time_period['End'],
                         'cost'                  : unblended,
                         'currency'              : metrics['UnblendedCost']['Unit'],
                         'utilization'           : utilization,
-                        'utilization_unit'      : None
+                        'utilization_unit'      : utilization_unit
                     })
 
             result_data = sorted(result_data, key=lambda x: x['cost'], reverse=True)
@@ -618,62 +655,106 @@ class AWSResourceManager:
         try:
             if not self.get_date():
                 return None
-                
             
             config_client = boto3.client('config', region_name=REGION)
             
-            compliant_count = 0
-            non_compliant_count = 0
-            non_compliant_rules = []
+            # Step 0: Convert dates to compare
+            if not self.start_date or not self.end_date:
+                return None
             
-            # Step 1: Get compliance status (fast)
+            # Use start_date for both start and end to get single day range
+            start_datetime  = datetime.combine(self.start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            end_datetime    = datetime.combine(self.start_date, datetime.min.time()).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+
+            # Step 1: Build Conformance Mapping
+            rule_to_pack_mapping    = {}
+            try:
+                for pack in config_client.describe_conformance_packs()['ConformancePackDetails']:
+                    pack_name = pack['ConformancePackName']
+                    
+                    try:
+                        pack_compliance = config_client.describe_conformance_pack_compliance(
+                            ConformancePackName=pack_name
+                        )
+                        
+                        for rule_compliance in pack_compliance['ConformancePackRuleComplianceList']:
+                            if rule_name := rule_compliance.get('ConfigRuleName'):
+                                rule_to_pack_mapping[rule_name] = pack_name
+                                
+                    except Exception as e:
+                        self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Conformance Pack: " + str(e)})
+                        pass
+                        
+            except Exception as e:
+                self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Conformance Pack: " + str(e)})
+                pass
+
+            # Step 2: Get all compliance data
+            compliant_count         = 0
+            non_compliant_count     = 0
+            non_compliant_resources = []
+
             paginator = config_client.get_paginator('describe_compliance_by_config_rule')
+
             for page in paginator.paginate():
-                for rule_compliance in page.get('ComplianceByConfigRules', []):
-                    compliance_type = rule_compliance.get('Compliance', {}).get('ComplianceType')
+                for rule in page.get('ComplianceByConfigRules', []):
+                    compliance_type = rule.get('Compliance', {}).get('ComplianceType')
+                    
                     if compliance_type == 'COMPLIANT':
                         compliant_count += 1
                     elif compliance_type == 'NON_COMPLIANT':
                         non_compliant_count += 1
-                        non_compliant_rules.append(rule_compliance.get('ConfigRuleName'))
+                        rule_name           = rule['ConfigRuleName']
+                        conformance_pack    = rule_to_pack_mapping.get(rule_name, 'Standalone')
+                        
+                        try:
+                            details = config_client.get_compliance_details_by_config_rule(
+                                ConfigRuleName=rule_name,
+                                ComplianceTypes=['NON_COMPLIANT'],
+                                Limit=50
+                            )
+                            #print(details)
+                            for eval_result in details['EvaluationResults']:
+                                #config_rule_invoked_time = eval_result.get('ConfigRuleInvokedTime')
+                                result_time = eval_result.get('ResultRecordedTime')
+
+                                # Convert result_time to UTC for comparison
+                                if result_time:
+                                    result_time_utc = result_time.astimezone(timezone.utc)
+                                    
+                                    #if start_datetime <= result_time_utc <= end_datetime:
+                                    qualifier   = eval_result['EvaluationResultIdentifier']['EvaluationResultQualifier']
+                                    non_compliant_resources.append({
+                                                                    'rule_name'                 : rule_name,
+                                                                    'resource_id'               : qualifier.get('ResourceId'),
+                                                                    'resource_type'             : qualifier.get('ResourceType'),
+                                                                    'config_rule_invoked_time'  : result_time,
+                                                                    'conformance_pack'          : conformance_pack,
+                                                                    'compliance_type'           : eval_result.get('ComplianceType'),
+                                                                    'annotation'                : eval_result.get('Annotation'),
+                                                                    'evaluation_mode'           : qualifier.get('EvaluationMode')
+                                                                    })
+                                    
+                        except Exception as e:
+                            self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Compliance rules: "+str(e)})
+
+            # Step 3: Calculate totals and score
             
-            total_rules = compliant_count + non_compliant_count
-            
-            # Step 2: Fetch resource details in parallel
-            def get_rule_details(rule_name):
-                try:
-                    details = config_client.get_compliance_details_by_config_rule(
-                        ConfigRuleName=rule_name,
-                        ComplianceTypes=['NON_COMPLIANT'],
-                        Limit=50
-                    )
-                    return [{
-                        'rule_name': rule_name,
-                        'resource_id': r.get('EvaluationResultIdentifier', {}).get('EvaluationResultQualifier', {}).get('ResourceId'),
-                        'resource_type': r.get('EvaluationResultIdentifier', {}).get('EvaluationResultQualifier', {}).get('ResourceType')
-                    } for r in details.get('EvaluationResults', [])]
-                except:
-                    return []
-            
-            non_compliant_resources = []
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(get_rule_details, rule): rule for rule in non_compliant_rules}
-                for future in as_completed(futures):
-                    non_compliant_resources.extend(future.result())
-            
-            config_data = {
-                'date_from': self.start_date.strftime('%Y-%m-%d'),
-                'date_to': self.end_date.strftime('%Y-%m-%d'),
-                'compliance_score': round((compliant_count / max(total_rules, 1)) * 100, 2),
-                'total_rules': total_rules,
-                'compliant_rules': compliant_count,
-                'non_compliant_rules': non_compliant_count,
-                #'non_compliant_resource_count': len(non_compliant_resources),
-                'non_compliant_resources':non_compliant_resources
-            }
-            
+            total_rules     = compliant_count + non_compliant_count
+            compliance_score= round((compliant_count / max(total_rules, 1)) * 100, 2) if total_rules > 0 else 0
+            config_data     = {
+                                'date_from'                 : self.start_date.strftime('%Y-%m-%d') if self.start_date else '',
+                                'date_to'                   : self.end_date.strftime('%Y-%m-%d') if self.end_date else '',
+                                'compliance_score'          : compliance_score,
+                                'total_rules'               : total_rules,
+                                'compliant_rules'           : compliant_count,
+                                'non_compliant_rules'       : non_compliant_count,
+                                'non_compliant_resources'   : non_compliant_resources
+                              }
+
             self.data.set_data(attr=AWSResourceType.CONFIG, data=config_data)
             self.set_log(def_type=AWSResourceType.CONFIG)
+
             return config_data
             
         except Exception as e:
@@ -687,8 +768,8 @@ class AWSResourceManager:
                 return None
                 
             ce_client   = boto3.client('ce')
-            start_date  = self.start_date.strftime('%Y-%m-%d')
-            end_date    = self.end_date.strftime('%Y-%m-%d')
+            start_date  = self.start_date.strftime('%Y-%m-%d') if self.start_date else ''
+            end_date    = self.end_date.strftime('%Y-%m-%d') if self.end_date else ''
             
             # Get all cost metrics
             current_costs = AWSResponse(ce_client.get_cost_and_usage(
@@ -707,8 +788,8 @@ class AWSResourceManager:
                 Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
             ))
             
-            prev_end = self.start_date.strftime('%Y-%m-%d')
-            prev_start = (self.start_date - timedelta(days=self.days)).strftime('%Y-%m-%d')
+            prev_end    = self.start_date.strftime('%Y-%m-%d') if self.start_date else ''
+            prev_start  = (self.start_date - timedelta(days=self.days)).strftime('%Y-%m-%d') if self.start_date else ''
             
             previous_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': prev_start, 'End': prev_end},
@@ -734,12 +815,12 @@ class AWSResourceManager:
             if service_costs.data['ResultsByTime']:
                 latest_period = service_costs.data['ResultsByTime'][-1]
                 top_services = [{
-                    'service': s['Keys'][0],
-                    'cost': float(s['Metrics']['UnblendedCost']['Amount']),
-                    #'unblended_cost': float(s['Metrics']['UnblendedCost']['Amount']),
-                    #'blended_cost': float(s['Metrics']['BlendedCost']['Amount']),
+                    'service'           : s['Keys'][0],
+                    'cost'              : float(s['Metrics']['UnblendedCost']['Amount']),
+                    #'unblended_cost'   : float(s['Metrics']['UnblendedCost']['Amount']),
+                    #'blended_cost'     : float(s['Metrics']['BlendedCost']['Amount']),
                     #'net_unblended_cost': float(s['Metrics']['NetUnblendedCost']['Amount']),
-                    #'amortized_cost': float(s['Metrics']['AmortizedCost']['Amount'])
+                    #'amortized_cost'   : float(s['Metrics']['AmortizedCost']['Amount'])
                 } for s in sorted(latest_period['Groups'], key=lambda x: float(x['Metrics']['UnblendedCost']['Amount']), reverse=True)[:5]]
             
             forecast_data = []
@@ -748,32 +829,32 @@ class AWSResourceManager:
                 forecast = AWSResponse(ce_client.get_cost_forecast(
                     TimePeriod={'Start': end_date, 'End': forecast_end},
                     Metric='UNBLENDED_COST',
-                    Granularity=self.interval
+                    Granularity="MONTHLY"
                 ))
                 forecast_data = [{'period': {'start': p['TimePeriod']['Start'], 'end': p['TimePeriod']['End']}, 'amount': float(p['MeanValue'])}
                                 for p in forecast.data.get('ForecastResultsByTime', [])]
             except Exception as e:
                 self.set_log(def_type=AWSResourceType.COST, status="Fail", value={'Forecast unavailable': str(e)})
             
-            summary = {
-                'account_id': self.account_id,
-                'current_period_cost': current['unblended'],
-                'previous_period_cost': previous['unblended'],
-                #'unblended_cost': current['unblended'],
-                #'blended_cost': current['blended'],
-                #'net_unblended_cost': current['net_unblended'],
-                #'amortized_cost': current['amortized'],
-                #'credits_refunds': current['unblended'] - current['net_unblended'],
-                #'previous_unblended_cost': previous['unblended'],
-                #'previous_blended_cost': previous['blended'],
-                #'previous_net_unblended_cost': previous['net_unblended'],
-                #'previous_amortized_cost': previous['amortized'],
-                'cost_difference': current['unblended'] - previous['unblended'],
-                'cost_difference_percentage': ((current['unblended'] - previous['unblended']) / previous['unblended'] * 100) if previous['unblended'] > 0 else 0,
-                'top_services': top_services,
-                'period': {'start': start_date, 'end': end_date, 'granularity': self.interval},
-                'forecast': forecast_data
-            }
+            summary =   {
+                            'account_id'                    : self.account_id,
+                            'current_period_cost'           : current['unblended'],
+                            'previous_period_cost'          : previous['unblended'],
+                            #'unblended_cost'                : current['unblended'],
+                            #'blended_cost'                  : current['blended'],
+                            #'net_unblended_cost'            : current['net_unblended'],
+                            #'amortized_cost'                : current['amortized'],
+                            #'credits_refunds'               : current['unblended'] - current['net_unblended'],
+                            #'previous_unblended_cost'       : previous['unblended'],
+                            #'previous_blended_cost'         : previous['blended'],
+                            #'previous_net_unblended_cost'   : previous['net_unblended'],
+                            #'previous_amortized_cost'       : previous['amortized'],
+                            'cost_difference'               : current['unblended'] - previous['unblended'],
+                            'cost_difference_percentage'    : ((current['unblended'] - previous['unblended']) / previous['unblended'] * 100) if previous['unblended'] > 0 else 0,
+                            'top_services'                  : top_services,
+                            'period'                        : {'start': start_date, 'end': end_date, 'granularity': self.interval},
+                            'forecast'                      : forecast_data
+                        }
             
             self.data.set_data(attr=AWSResourceType.COST, data=summary)
             self.set_log(def_type=AWSResourceType.COST)
@@ -790,19 +871,16 @@ class AWSResourceManager:
             patches = []
             
             # Get individual patches for this instance directly
-            patch_response = AWSResponse(ssm.describe_instance_patches(
-                InstanceId=instance_id
-            ))
-                        
+            patch_response = AWSResponse(ssm.describe_instance_patches(InstanceId=instance_id))
             for patch in patch_response.data.get('Patches', []):
                 patches.append({
-                    'instance_id': instance_id,
-                    'title': patch.get('Title'),
-                    'classification': patch.get('Classification') or "Normal",
-                    'severity': patch.get('Severity') or "None",
-                    'state': patch.get('State'),
-                    'installed_time': patch.get('InstalledTime')
-                })
+                                'instance_id'   : instance_id,
+                                'title'         : patch.get('Title'),
+                                'classification': patch.get('Classification') or "Normal",
+                                'severity'      : patch.get('Severity') or "None",
+                                'state'         : patch.get('State'),
+                                'installed_time': patch.get('InstalledTime')
+                            })
             
             return patches
         except Exception as e:
@@ -814,14 +892,14 @@ class AWSResourceManager:
         try:
             ssm = boto3.client('ssm', region_name=REGION)
             security_inventory = {
-                'instances': [],
-                'applications': [],
-                'patches': [],
-                'services': [],
-                'users': [],
-                'processes': [],
-                'network_ports': [],
-                'certificates': []
+                'instances'     : [],
+                'applications'  : [],
+                'patches'       : [],
+                'services'      : [],
+                'users'         : [],
+                'processes'     : [],
+                'network_ports' : [],
+                'certificates'  : []
             }
             
             instances = AWSResponse(ssm.describe_instance_information())
@@ -833,22 +911,25 @@ class AWSResourceManager:
                 
                 # Add instance info
                 security_inventory['instances'].append({
-                    'instance_id'           : instance_id,
-                    'platform'              : instance.get('PlatformName'),
-                    'platform_version'      : instance.get('PlatformVersion'),
-                    'agent_version'         : instance.get('AgentVersion'),
-                    'last_ping'             : instance.get('LastPingDateTime'),
-                    'computer_name'         : instance.get('ComputerName'),
-                    'instance_type'         : instance.get('ResourceType'),
-                    'ip_address'            : instance.get('IPAddress'),
-                    'ping_status'           : instance.get('PingStatus'),
-                    'last_ping_date_time'   : instance.get('LastPingDateTime')
+                    'instance_id'                   : instance_id,
+                    'platform'                      : instance.get('PlatformName'),
+                    'platform_type'                 : instance.get('PlatformType'),
+                    'platform_version'              : instance.get('PlatformVersion'),
+                    'agent_version'                 : instance.get('AgentVersion'),
+                    'is_latest_version'             : instance.get('IsLatestVersion'),
+                    'last_ping'                     : instance.get('LastPingDateTime'),
+                    'computer_name'                 : instance.get('ComputerName'),
+                    'instance_type'                 : instance.get('ResourceType'),
+                    'ip_address'                    : instance.get('IPAddress'),
+                    'ping_status'                   : instance.get('PingStatus'),
+                    'last_ping_date_time'           : instance.get('LastPingDateTime'),
+                    'association_status'            : instance.get('AssociationStatus'),
+                    'association_execution_date'    : instance.get('LastAssociationExecutionDate'),
+                    'association_success_date'      : instance.get('LastSuccessfulAssociationExecutionDate')
                 })
                 
                 # Get security-relevant inventory types (only supported ones)
-                for inv_type, key in [
-                    ('AWS:PatchSummary', 'patches')
-                ]:
+                for inv_type, key in [('AWS:PatchSummary', 'patches')]:
                     try:
                         resp = AWSResponse(ssm.get_inventory(
                             Filters=[{'Key': 'AWS:InstanceInformation.InstanceId', 'Values': [instance_id]}],
@@ -858,53 +939,9 @@ class AWSResourceManager:
                         for entity in resp.data.get('Entities', []):
                             for data_item in entity.get('Data', {}).values():
                                 for item in data_item.get('Content', []):
-                                    if inv_type == 'AWS:Application':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'name': item.get('Name'),
-                                            'version': item.get('Version'),
-                                            'publisher': item.get('Publisher')
-                                        })
-                                    elif inv_type == 'AWS:PatchSummary':
+                                    if inv_type == 'AWS:PatchSummary':
                                         detailed_patches = self.get_patch_details(instance_id)
                                         security_inventory['patches'].extend(detailed_patches)
-
-                                    elif inv_type == 'AWS:Service':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'name': item.get('Name'),
-                                            'status': item.get('Status'),
-                                            'startup_type': item.get('StartType')
-                                        })
-                                    elif inv_type == 'Custom:Users':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'username': item.get('Username'),
-                                            'is_admin': item.get('IsAdmin', False),
-                                            'last_login': item.get('LastLogin')
-                                        })
-                                    elif inv_type == 'Custom:Processes':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'name': item.get('Name'),
-                                            'path': item.get('ExecutablePath'),
-                                            'user': item.get('User')
-                                        })
-                                    elif inv_type == 'Custom:NetworkPorts':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'port': item.get('Port'),
-                                            'protocol': item.get('Protocol'),
-                                            'state': item.get('State')
-                                        })
-                                    elif inv_type == 'Custom:Certificates':
-                                        security_inventory[key].append({
-                                            'instance_id': instance_id,
-                                            'subject': item.get('Subject'),
-                                            'issuer': item.get('Issuer'),
-                                            'not_after': item.get('NotAfter'),
-                                            'is_expired': item.get('IsExpired')
-                                        })
                     except Exception as e:
                         print(f"Error processing inventory type {inv_type} for instance {instance_id}: {str(e)}")
                         continue
@@ -920,32 +957,30 @@ class AWSResourceManager:
     #6.Fetching Security data across Security hub, Guard Duty, IAM, KMS, WAF, Inspector and Trusted Advisor.
     def get_security(self):
         try:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            
-            result = {
-                'security_hub': [],
-                'guard_duty': [],
-                'kms': [],
-                'waf': [],
-                'waf_rules': [],
-                'cloudtrail': [],
-                'secrets_manager': [],
-                'certificate_manager': [],
-                'inspector': []
-            }
+            result  =   {
+                            'security_hub'          : [],
+                            'guard_duty'            : [],
+                            'kms'                   : [],
+                            'waf'                   : [],
+                            'waf_rules'             : [],
+                            'cloudtrail'            : [],
+                            'secrets_manager'       : [],
+                            'certificate_manager'   : [],
+                            'inspector'             : []
+                        }
             
             # Fetch all security services in parallel
-            security_tasks = {
-                'security_hub': self.get_security_hub,
-                'guard_duty': self.get_guard_duty_security,
-                'kms': self.get_kms_security,
-                'waf': self.get_waf_security,
-                'waf_rules': self.get_waf_rules,
-                'cloudtrail': self.get_cloudtrail_security,
-                'secrets_manager': self.get_secrets_security,
-                'certificate_manager': self.get_certificate_security,
-                'inspector': self.get_inspector
-            }
+            security_tasks  =   {
+                                    'security_hub'          : self.get_security_hub,
+                                    'guard_duty'            : self.get_guard_duty_security,
+                                    'kms'                   : self.get_kms_security,
+                                    'waf'                   : self.get_waf_security,
+                                    'waf_rules'             : self.get_waf_rules,
+                                    'cloudtrail'            : self.get_cloudtrail_security,
+                                    'secrets_manager'       : self.get_secrets_security,
+                                    'certificate_manager'   : self.get_certificate_security,
+                                    'inspector'             : self.get_inspector
+                                }
             
             with ThreadPoolExecutor(max_workers=9) as executor:
                 futures = {executor.submit(func): key for key, func in security_tasks.items()}
@@ -978,21 +1013,21 @@ class AWSResourceManager:
             next_token = None
             while True:
                 params = {
-                    'Filters': {
-                        'UpdatedAt'     : [{'Start': self.start_date.isoformat(), 'End': self.end_date.isoformat()}],
-                        'AwsAccountId'  : [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
-                        'SeverityLabel' : [
-                            {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
-                            {'Value': 'HIGH', 'Comparison': 'EQUALS'},
-                            {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
-                            {'Value': 'LOW', 'Comparison': 'EQUALS'}
-                        ],
-                        'WorkflowStatus': [
-                            {'Value': 'NEW', 'Comparison': 'EQUALS'},
-                            {'Value': 'RESOLVED', 'Comparison': 'EQUALS'},
-                            {'Value': 'SUPPRESSED', 'Comparison': 'EQUALS'}
-                        ],
-                    },
+                    'Filters'   : {
+                                    'UpdatedAt'     :   [{'Start': self.start_date.isoformat() if self.start_date else '', 'End': self.end_date.isoformat() if self.end_date else ''}],
+                                    'AwsAccountId'  :   [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
+                                    'SeverityLabel' :   [
+                                                            {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
+                                                            {'Value': 'HIGH', 'Comparison': 'EQUALS'},
+                                                            {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
+                                                            {'Value': 'LOW', 'Comparison': 'EQUALS'}
+                                                        ],
+                                    'WorkflowStatus':   [
+                                                            {'Value': 'NEW', 'Comparison': 'EQUALS'},
+                                                            {'Value': 'RESOLVED', 'Comparison': 'EQUALS'},
+                                                            {'Value': 'SUPPRESSED', 'Comparison': 'EQUALS'}
+                                                        ],
+                                },
                     'MaxResults': 100
                 }
                 
@@ -1031,14 +1066,14 @@ class AWSResourceManager:
         
         service = finding.get('ProductName', '')
         if service not in service_findings:
-            service_findings[service] = {
-                'service': service,
-                'total_findings': 0,
-                'severity_counts': {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFORMATIONAL': 0},
-                'open_findings': 0,
-                'resolved_findings': 0,
-                'findings': []
-            }
+            service_findings[service]   =   {
+                                                'service'           : service,
+                                                'total_findings'    : 0,
+                                                'severity_counts'   : {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFORMATIONAL': 0},
+                                                'open_findings'     : 0,
+                                                'resolved_findings' : 0,
+                                                'findings'          : []
+                                            }
         
         service_findings[service]['total_findings'] += 1
         severity = finding.get('Severity', {}).get('Label', 'UNKNOWN')
@@ -1054,27 +1089,27 @@ class AWSResourceManager:
         
         resource = finding.get('Resources', [{}])[0]
         service_findings[service]['findings'].append({
-            'finding_id': finding.get('Id'),
-            'service': resource.get('Type'),
-            'title': finding.get('Title'),
-            'description': finding.get('Description'),
-            'severity': severity,
-            'status': workflow_status or 'OPEN',
-            'resource_type': resource.get('Type'),
-            'resource_id': resource.get('Id'),
-            'created_at': finding.get('CreatedAt'),
-            'updated_at': finding.get('UpdatedAt'),
-            'recommendation': finding.get('Remediation', {}).get('Recommendation', {}).get('Text'),
-            'compliance_status': finding.get('Compliance', {}).get('Status'),
-            'region': finding.get('Region'),
-            'workflow_state': finding.get('WorkflowState', ''),
-            'record_state': finding.get('RecordState', 'ACTIVE'),
-            'product_name': finding.get('ProductName'),
-            'company_name': finding.get('CompanyName'),
-            'product_arn': finding.get('ProductArn'),
-            'generator_id': finding.get('GeneratorId'),
-            'generator': finding.get('ProductName', '')
-        })
+                                                        'finding_id'        : finding.get('Id'),
+                                                        'service'           : resource.get('Type'),
+                                                        'title'             : finding.get('Title'),
+                                                        'description'       : finding.get('Description'),
+                                                        'severity'          : severity,
+                                                        'status'            : workflow_status or 'OPEN',
+                                                        'resource_type'     : resource.get('Type'),
+                                                        'resource_id'       : resource.get('Id'),
+                                                        'created_at'        : finding.get('CreatedAt'),
+                                                        'updated_at'        : finding.get('UpdatedAt'),
+                                                        'recommendation'    : finding.get('Remediation', {}).get('Recommendation', {}).get('Text'),
+                                                        'compliance_status' : finding.get('Compliance', {}).get('Status'),
+                                                        'region'            : finding.get('Region'),
+                                                        'workflow_state'    : finding.get('WorkflowState', ''),
+                                                        'record_state'      : finding.get('RecordState', 'ACTIVE'),
+                                                        'product_name'      : finding.get('ProductName'),
+                                                        'company_name'      : finding.get('CompanyName'),
+                                                        'product_arn'       : finding.get('ProductArn'),
+                                                        'generator_id'      : finding.get('GeneratorId'),
+                                                        'generator'         : finding.get('ProductName', '')
+                                                    })
 
     #Getting from Guard Duty
     def get_guard_duty_security(self):
@@ -1093,8 +1128,8 @@ class AWSResourceManager:
                 finding_criteria = {
                     'Criterion': {
                         'updatedAt': {
-                            'Gte': int(self.start_date.timestamp() * 1000),  # Convert to milliseconds
-                            'Lte': int(self.end_date.timestamp() * 1000)
+                            'Gte': int(self.start_date.timestamp() * 1000) if self.start_date else 0,  # Convert to milliseconds
+                            'Lte': int(self.end_date.timestamp() * 1000) if self.end_date else 0
                         }
                     }
                 }
@@ -1111,16 +1146,16 @@ class AWSResourceManager:
                     ))
                     for finding in finding_details.data.get('Findings', []):
                         findings.append({
-                            'id': finding.get('Id'),
-                            'type': finding.get('Type'),
-                            'severity': finding.get('Severity'),
-                            'title': finding.get('Title'),
-                            'description': finding.get('Description'),
-                            'created_at': finding.get('CreatedAt'),
-                            'updated_at': finding.get('UpdatedAt'),
-                            'confidence': finding.get('Confidence'),
-                            'region': finding.get('Region')
-                        })
+                                            'id'            : finding.get('Id'),
+                                            'type'          : finding.get('Type'),
+                                            'severity'      : finding.get('Severity'),
+                                            'title'         : finding.get('Title'),
+                                            'description'   : finding.get('Description'),
+                                            'created_at'    : finding.get('CreatedAt'),
+                                            'updated_at'    : finding.get('UpdatedAt'),
+                                            'confidence'    : finding.get('Confidence'),
+                                            'region'        : finding.get('Region')
+                                        })
             return findings
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'guard_duty': str(e)})
@@ -1130,15 +1165,14 @@ class AWSResourceManager:
     def get_iam_security(self):
         """Get IAM security posture within date range"""
         try:
-            from datetime import timezone
             iam = boto3.client('iam')
             iam_data = {
-                'users': [],
-                'roles': [],
-                'policies': [],
-                'access_keys': [],
-                'mfa_devices': []
-            }
+                        'users'         : [],
+                        'roles'         : [],
+                        'policies'      : [],
+                        'access_keys'   : [],
+                        'mfa_devices'   : []
+                    }
             
             start_date_aware, end_date_aware = self._get_timezone_aware_dates()
             
@@ -1149,16 +1183,16 @@ class AWSResourceManager:
                 password_last_used  = user.get('PasswordLastUsed')
                 
                 # Filter users created or with password used within date range
-                if (user_created and start_date_aware <= user_created <= end_date_aware) or (password_last_used and start_date_aware <= password_last_used <= end_date_aware):
+                if (user_created and start_date_aware and end_date_aware and start_date_aware <= user_created <= end_date_aware) or (password_last_used and start_date_aware and end_date_aware and start_date_aware <= password_last_used <= end_date_aware):
                     
                     username = user.get('UserName')
                     iam_data['users'].append({
-                        'username': username,
-                        'created_date': user.get('CreateDate'),
-                        'password_last_used': password_last_used,
-                        'mfa_enabled': len(AWSResponse(iam.list_mfa_devices(UserName=username)).data.get('MFADevices', [])) > 0,
-                        'access_keys_count': len(AWSResponse(iam.list_access_keys(UserName=username)).data.get('AccessKeyMetadata', []))
-                    })
+                                                'username'          : username,
+                                                'created_date'      : user.get('CreateDate'),
+                                                'password_last_used': password_last_used,
+                                                'mfa_enabled'       : len(AWSResponse(iam.list_mfa_devices(UserName=username)).data.get('MFADevices', [])) > 0,
+                                                'access_keys_count' : len(AWSResponse(iam.list_access_keys(UserName=username)).data.get('AccessKeyMetadata', []))
+                                            })
             
             return iam_data
         except Exception as e:
@@ -1180,22 +1214,30 @@ class AWSResourceManager:
             for key in keys.data.get('Keys', []):
                 key_id = key.get('KeyId')
                 try:
-                    key_details = AWSResponse(kms.describe_key(KeyId=key_id))
-                    key_metadata = key_details.data.get('KeyMetadata', {})
-                    creation_date = key_metadata.get('CreationDate')
+                    key_details     = AWSResponse(kms.describe_key(KeyId=key_id))
+                    key_metadata    = key_details.data.get('KeyMetadata', {})
+                    creation_date   = key_metadata.get('CreationDate')
                     
                     # Filter keys created within date range
-                    if creation_date and self.start_date <= creation_date.replace(tzinfo=None) <= self.end_date:
-                        kms_data.append({
-                            'key_id': key_id,
-                            'arn': key_metadata.get('Arn'),
-                            'description': key_metadata.get('Description'),
-                            'key_usage': key_metadata.get('KeyUsage'),
-                            'key_state': key_metadata.get('KeyState'),
-                            'creation_date': creation_date,
-                            'enabled': key_metadata.get('Enabled'),
-                            'key_rotation_enabled': AWSResponse(kms.get_key_rotation_status(KeyId=key_id)).data.get('KeyRotationEnabled', False)
-                        })
+                    #if creation_date and self.start_date <= creation_date.replace(tzinfo=None) <= self.end_date:
+                    try:
+                        rotation_enabled = AWSResponse(kms.get_key_rotation_status(KeyId=key_id)).data.get('KeyRotationEnabled', False)
+                    except ClientError as e:
+                        if e.response['Error']['Code'] == 'AccessDeniedException':
+                            rotation_enabled = True  # Mark as unknown
+                        else:
+                            raise
+
+                    kms_data.append({
+                                        'key_id'                : key_id,
+                                        'arn'                   : key_metadata.get('Arn'),
+                                        'description'           : key_metadata.get('Description'),
+                                        'key_usage'             : key_metadata.get('KeyUsage'),
+                                        'key_state'             : key_metadata.get('KeyState'),
+                                        'creation_date'         : creation_date,
+                                        'enabled'               : key_metadata.get('Enabled'),
+                                        'key_rotation_enabled'  : rotation_enabled
+                                    })
                 except Exception as e:
                     print(f"Error processing KMS key {key_id}: {str(e)}")
                     continue
@@ -1213,14 +1255,14 @@ class AWSResourceManager:
             for scope in ['REGIONAL', 'CLOUDFRONT']:
                 try:
                     # Use us-east-1 for CLOUDFRONT scope, current region for others
-                    region = 'us-east-1' if scope == 'CLOUDFRONT' else REGION
-                    waf = boto3.client('wafv2', region_name=region)
+                    region  = 'us-east-1' if scope == 'CLOUDFRONT' else REGION
+                    waf     = boto3.client('wafv2', region_name=region)
                     
                     web_acls = AWSResponse(waf.list_web_acls(Scope=scope))
                     for acl in web_acls.data.get('WebACLs', []):
                         acl_details = AWSResponse(waf.get_web_acl(Name=acl.get('Name'), Scope=scope, Id=acl.get('Id')))
-                        web_acl = acl_details.data.get('WebACL', {})
-                        rules = web_acl.get('Rules', [])
+                        web_acl     = acl_details.data.get('WebACL', {})
+                        rules       = web_acl.get('Rules', [])
                         
                         # Get resources and logging
                         try:
@@ -1228,8 +1270,8 @@ class AWSResourceManager:
                                 WebACLArn=web_acl.get('ARN'),
                                 ResourceType='APPLICATION_LOAD_BALANCER' if scope == 'REGIONAL' else 'CLOUDFRONT'
                             )).data.get('ResourceArns', [])
-                            logging_config = AWSResponse(waf.get_logging_configuration(ResourceArn=web_acl.get('ARN')))
-                            logging_enabled, log_destination = True, logging_config.data.get('LoggingConfiguration', {}).get('LogDestinationConfigs', [])
+                            logging_config                      = AWSResponse(waf.get_logging_configuration(ResourceArn=web_acl.get('ARN')))
+                            logging_enabled, log_destination    = True, logging_config.data.get('LoggingConfiguration', {}).get('LogDestinationConfigs', [])
                         except:
                             resources, logging_enabled, log_destination = [], False, []
                         
@@ -1252,20 +1294,30 @@ class AWSResourceManager:
                                 ip_sets.append(statement['IPSetReferenceStatement'].get('ARN'))
                         
                         waf_data.append({
-                            'name': acl.get('Name'), 'id': acl.get('Id'), 'arn': web_acl.get('ARN'),
-                            'scope': scope, 'description': acl.get('Description', ''),
-                            'default_action': web_acl.get('DefaultAction'), 'rules_count': len(rules),
-                            'capacity': web_acl.get('Capacity', 0),
-                            'managed_rules_count': rule_types['managed'], 'custom_rules_count': rule_types['custom'],
-                            'rate_limit_rules_count': rule_types['rate_limit'],
-                            'associated_resources': resources, 'associated_resources_count': len(resources),
-                            'logging_enabled': logging_enabled, 'log_destinations': log_destination,
-                            'geo_blocking_enabled': len(blocked_countries) > 0, 'blocked_countries': blocked_countries,
-                            'ip_sets': ip_sets, 'created_date': web_acl.get('CreationDate'),
-                            'last_modified': web_acl.get('LastModifiedTime'), 'tags': web_acl.get('Tags', []),
-                            'sampled_requests_enabled': any(rule.get('VisibilityConfig', {}).get('SampledRequestsEnabled', False) for rule in rules),
-                            'cloudwatch_metrics_enabled': any(rule.get('VisibilityConfig', {}).get('CloudWatchMetricsEnabled', False) for rule in rules)
-                        })
+                                            'name'                      : acl.get('Name'), 
+                                            'id'                        : acl.get('Id'), 
+                                            'arn'                       : web_acl.get('ARN'),
+                                            'scope'                     : scope, 
+                                            'description'               : acl.get('Description', ''),
+                                            'default_action'            : web_acl.get('DefaultAction'), 
+                                            'rules_count'               : len(rules),
+                                            'capacity'                  : web_acl.get('Capacity', 0),
+                                            'managed_rules_count'       : rule_types['managed'], 
+                                            'custom_rules_count'        : rule_types['custom'],
+                                            'rate_limit_rules_count'    : rule_types['rate_limit'],
+                                            'associated_resources'      : resources, 
+                                            'associated_resources_count': len(resources),
+                                            'logging_enabled'           : logging_enabled, 
+                                            'log_destinations'          : log_destination,
+                                            'geo_blocking_enabled'      : len(blocked_countries) > 0, 
+                                            'blocked_countries'         : blocked_countries,
+                                            'ip_sets'                   : ip_sets, 
+                                            'created_date'              : web_acl.get('CreationDate'),
+                                            'last_modified'             : web_acl.get('LastModifiedTime'), 
+                                            'tags'                      : web_acl.get('Tags', []),
+                                            'sampled_requests_enabled'  : any(rule.get('VisibilityConfig', {}).get('SampledRequestsEnabled', False) for rule in rules),
+                                            'cloudwatch_metrics_enabled': any(rule.get('VisibilityConfig', {}).get('CloudWatchMetricsEnabled', False) for rule in rules)
+                                        })
                 except Exception as e:
                     print(f"Error processing WAF scope {scope}: {str(e)}")
                     continue
@@ -1284,13 +1336,11 @@ class AWSResourceManager:
             
             for scope in scopes_to_check:
                 try:
-                    wafv2 = boto3.client('wafv2', region_name='us-east-1' if scope == 'CLOUDFRONT' else REGION)
-                    web_acls = wafv2.list_web_acls(Scope=scope)['WebACLs']
+                    wafv2       = boto3.client('wafv2', region_name='us-east-1' if scope == 'CLOUDFRONT' else REGION)
+                    web_acls    = wafv2.list_web_acls(Scope=scope)['WebACLs']
                     
                     for acl in web_acls:
-                        acl_details = wafv2.get_web_acl(
-                            Name=acl['Name'], Scope=scope, Id=acl['Id']
-                        )
+                        acl_details = wafv2.get_web_acl(Name=acl['Name'], Scope=scope, Id=acl['Id'])
                         
                         # Check ACL-level logging
                         try:
@@ -1300,9 +1350,9 @@ class AWSResourceManager:
                             logging_enabled = False
                         
                         for rule in acl_details['WebACL']['Rules']:
-                            statement = rule.get('Statement', {})
-                            statement_type = list(statement.keys())[0] if statement else 'Unknown'
-                            visibility = rule.get('VisibilityConfig', {})
+                            statement       = rule.get('Statement', {})
+                            statement_type  = list(statement.keys())[0] if statement else 'Unknown'
+                            visibility      = rule.get('VisibilityConfig', {})
                             
                             # Handle missing Action field - use OverrideAction if Action is missing
                             action = rule.get('Action')
@@ -1310,35 +1360,31 @@ class AWSResourceManager:
                                 action = rule.get('OverrideAction', {'None': {}})
                             
                             # Analyze rule properties
-                            is_managed = statement_type == 'ManagedRuleGroupStatement'
-                            is_rate_limit = statement_type == 'RateBasedStatement'
-                            has_geo_blocking = 'GeoMatchStatement' in str(statement)
-                            has_sql_injection = 'SqliMatchStatement' in str(statement) or (
-                                is_managed and 'SQLi' in statement.get('ManagedRuleGroupStatement', {}).get('Name', '')
-                            )
-                            has_xss_protection = 'XssMatchStatement' in str(statement) or (
-                                is_managed and 'XSS' in statement.get('ManagedRuleGroupStatement', {}).get('Name', '')
-                            )
+                            is_managed          = statement_type == 'ManagedRuleGroupStatement'
+                            is_rate_limit       = statement_type == 'RateBasedStatement'
+                            has_geo_blocking    = 'GeoMatchStatement' in str(statement)
+                            has_sql_injection   = 'SqliMatchStatement' in str(statement) or (is_managed and 'SQLi' in statement.get('ManagedRuleGroupStatement', {}).get('Name', ''))
+                            has_xss_protection  = 'XssMatchStatement' in str(statement) or (is_managed and 'XSS' in statement.get('ManagedRuleGroupStatement', {}).get('Name', ''))
 
                             waf_rules.append({
-                                'web_acl_name': acl['Name'],
-                                'rule_name': rule['Name'],
-                                'priority': rule['Priority'],
-                                'action': action,
-                                'statement_type': statement_type,
-                                'is_managed_rule': is_managed,
-                                'is_custom_rule': not is_managed,
-                                'rate_limit': is_rate_limit,
-                                'logging_enabled': logging_enabled,
-                                'geo_blocking': has_geo_blocking,
-                                'sql_injection': has_sql_injection,
-                                'sample_request_enabled': visibility.get('SampledRequestsEnabled', False),
-                                'cloudwatch_enabled': visibility.get('CloudWatchMetricsEnabled', False),
-                                'has_xss_protection': has_xss_protection,
-                                'waf_version': 'v2',
-                                'is_compliant': self._check_waf_rule_compliance(statement_type, statement),
-                                'scope': scope
-                            })
+                                                'web_acl_name'          : acl['Name'],
+                                                'rule_name'             : rule['Name'],
+                                                'priority'              : rule['Priority'],
+                                                'action'                : action,
+                                                'statement_type'        : statement_type,
+                                                'is_managed_rule'       : is_managed,
+                                                'is_custom_rule'        : not is_managed,
+                                                'rate_limit'            : is_rate_limit,
+                                                'logging_enabled'       : logging_enabled,
+                                                'geo_blocking'          : has_geo_blocking,
+                                                'sql_injection'         : has_sql_injection,
+                                                'sample_request_enabled': visibility.get('SampledRequestsEnabled', False),
+                                                'cloudwatch_enabled'    : visibility.get('CloudWatchMetricsEnabled', False),
+                                                'has_xss_protection'    : has_xss_protection,
+                                                'waf_version'           : 'v2',
+                                                'is_compliant'          : self._check_waf_rule_compliance(statement_type, statement),
+                                                'scope'                 : scope
+                                            })
                 except Exception as e:
                     print(f"Error checking {scope} scope: {str(e)}")
                     continue
@@ -1357,23 +1403,23 @@ class AWSResourceManager:
                         rule = waf.get_rule(RuleId=rule_ref['RuleId'])
                         
                         waf_rules.append({
-                            'web_acl_name': acl['Name'],
-                            'rule_name': rule['Rule']['Name'],
-                            'priority': rule_ref['Priority'],
-                            'action': rule_ref['Action'],
-                            'statement_type': 'WAFv1_Rule',
-                            'is_managed_rule': False,
-                            'is_custom_rule': True,
-                            'rate_limit': False,
-                            'logging_enabled': False,
-                            'geo_blocking': False,
-                            'sql_injection': False,
-                            'sample_request_enabled': False,
-                            'cloudwatch_enabled': False,
-                            'has_xss_protection': False,
-                            'waf_version': 'v1',
-                            'is_compliant': False
-                        })
+                                            'web_acl_name'          : acl['Name'],
+                                            'rule_name'             : rule['Rule']['Name'],
+                                            'priority'              : rule_ref['Priority'],
+                                            'action'                : rule_ref['Action'],
+                                            'statement_type'        : 'WAFv1_Rule',
+                                            'is_managed_rule'       : False,
+                                            'is_custom_rule'        : True,
+                                            'rate_limit'            : False,
+                                            'logging_enabled'       : False,
+                                            'geo_blocking'          : False,
+                                            'sql_injection'         : False,
+                                            'sample_request_enabled': False,
+                                            'cloudwatch_enabled'    : False,
+                                            'has_xss_protection'    : False,
+                                            'waf_version'           : 'v1',
+                                            'is_compliant'          : False
+                                        })
             except Exception as e:
                 print(f"WAF v1 also failed: {str(e)}")
         
@@ -1382,15 +1428,15 @@ class AWSResourceManager:
     def _check_waf_rule_compliance(self, statement_type, statement):
         """Check if a WAF rule meets compliance requirements"""
         # Compliant rule types
-        compliant_types = [
-            'RateBasedStatement',
-            'ManagedRuleGroupStatement', 
-            'SqliMatchStatement',
-            'XssMatchStatement',
-            'GeoMatchStatement',
-            'IPSetReferenceStatement',
-            'RuleGroupReferenceStatement'
-        ]
+        compliant_types =   [
+                                'RateBasedStatement',
+                                'ManagedRuleGroupStatement', 
+                                'SqliMatchStatement',
+                                'XssMatchStatement',
+                                'GeoMatchStatement',
+                                'IPSetReferenceStatement',
+                                'RuleGroupReferenceStatement'
+                            ]
         
         # Additional checks for managed rule groups
         if statement_type == 'ManagedRuleGroupStatement':
@@ -1403,7 +1449,6 @@ class AWSResourceManager:
     def get_cloudtrail_security(self):
         """Get CloudTrail security events within date range"""
         try:
-            from datetime import timezone
             cloudtrail = boto3.client('cloudtrail', region_name=REGION)
             trail_data = []
             
@@ -1426,19 +1471,19 @@ class AWSResourceManager:
                     recent_events = []
                 
                 trail_data.append({
-                    'name': trail.get('Name'),
-                    'arn': trail.get('TrailARN'),
-                    'is_logging': status.data.get('IsLogging'),
-                    'is_multi_region': trail.get('IsMultiRegionTrail'),
-                    'include_global_events': trail.get('IncludeGlobalServiceEvents'),
-                    's3_bucket': trail.get('S3BucketName'),
-                    'kms_key_id': trail.get('KMSKeyId'),
-                    'log_file_validation': trail.get('LogFileValidationEnabled'),
-                    'recent_events_count': len(recent_events),
-                    'latest_delivery_time': status.data.get('LatestDeliveryTime'),
-                    'start_logging_time': status.data.get('StartLoggingTime'),
-                    'stop_logging_time': status.data.get('StopLoggingTime')
-                })
+                                    'name'                  : trail.get('Name'),
+                                    'arn'                   : trail.get('TrailARN'),
+                                    'is_logging'            : status.data.get('IsLogging'),
+                                    'is_multi_region'       : trail.get('IsMultiRegionTrail'),
+                                    'include_global_events' : trail.get('IncludeGlobalServiceEvents'),
+                                    's3_bucket'             : trail.get('S3BucketName'),
+                                    'kms_key_id'            : trail.get('KMSKeyId'),
+                                    'log_file_validation'   : trail.get('LogFileValidationEnabled'),
+                                    'recent_events_count'   : len(recent_events),
+                                    'latest_delivery_time'  : status.data.get('LatestDeliveryTime'),
+                                    'start_logging_time'    : status.data.get('StartLoggingTime'),
+                                    'stop_logging_time'     : status.data.get('StopLoggingTime')
+                                })
             return trail_data
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'cloudtrail': str(e)})
@@ -1448,7 +1493,6 @@ class AWSResourceManager:
     def get_secrets_security(self):
         """Get Secrets Manager security information within date range"""
         try:
-            from datetime import timezone
             secrets = boto3.client('secretsmanager', region_name=REGION)
             secrets_data = []
             
@@ -1457,27 +1501,24 @@ class AWSResourceManager:
             
             secret_list = AWSResponse(secrets.list_secrets())
             for secret in secret_list.data.get('SecretList', []):
-                created_date = secret.get('CreatedDate')
-                last_changed_date = secret.get('LastChangedDate')
-                last_accessed_date = secret.get('LastAccessedDate')
-                
+                created_date        = secret.get('CreatedDate')
+                last_changed_date   = secret.get('LastChangedDate')
+                last_accessed_date  = secret.get('LastAccessedDate')
                 # Filter secrets created, changed, or accessed within date range
-                if (created_date and start_date_aware <= created_date <= end_date_aware) or \
-                   (last_changed_date and start_date_aware <= last_changed_date <= end_date_aware) or \
-                   (last_accessed_date and start_date_aware <= last_accessed_date <= end_date_aware):
-                    
-                    secrets_data.append({
-                        'name': secret.get('Name'),
-                        'arn': secret.get('ARN'),
-                        'description': secret.get('Description'),
-                        'created_date': created_date,
-                        'last_changed_date': last_changed_date,
-                        'last_accessed_date': last_accessed_date,
-                        'rotation_enabled': secret.get('RotationEnabled'),
-                        'rotation_lambda_arn': secret.get('RotationLambdaARN'),
-                        'kms_key_id': secret.get('KmsKeyId'),
-                        'tags': secret.get('Tags', [])
-                    })
+
+                secrets_data.append({
+                    'name'                  : secret.get('Name'),
+                    'arn'                   : secret.get('ARN'),
+                    'description'           : secret.get('Description'),
+                    'created_date'          : created_date,
+                    'last_changed_date'     : last_changed_date,
+                    'last_accessed_date'    : last_accessed_date,
+                    'rotation_enabled'      : secret.get('RotationEnabled'),
+                    'rotation_lambda_arn'   : secret.get('RotationLambdaARN'),
+                    'kms_key_id'            : secret.get('KmsKeyId'),
+                    'tags'                  : secret.get('Tags', [])
+                })
+
             return secrets_data
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'secrets_manager': str(e)})
@@ -1494,8 +1535,8 @@ class AWSResourceManager:
             
             certificates = AWSResponse(acm.list_certificates())
             for cert in certificates.data.get('CertificateSummaryList', []):
-                cert_details = AWSResponse(acm.describe_certificate(CertificateArn=cert.get('CertificateArn')))
-                cert_info = cert_details.data.get('Certificate', {})
+                cert_details    = AWSResponse(acm.describe_certificate(CertificateArn=cert.get('CertificateArn')))
+                cert_info       = cert_details.data.get('Certificate', {})
                 
                 created_at = cert_info.get('CreatedAt')
                 issued_at = cert_info.get('IssuedAt')
@@ -1504,21 +1545,21 @@ class AWSResourceManager:
                 #if (created_at and start_date_aware <= created_at <= end_date_aware) or (issued_at and start_date_aware <= issued_at <= end_date_aware):
                     
                 cert_data.append({
-                    'arn': cert.get('CertificateArn'),
-                    'domain_name': cert.get('DomainName'),
-                    'subject_alternative_names': cert_info.get('SubjectAlternativeNames', []),
-                    'status': cert_info.get('Status'),
-                    'type': cert_info.get('Type'),
-                    'key_algorithm': cert_info.get('KeyAlgorithm'),
-                    'signature_algorithm': cert_info.get('SignatureAlgorithm'),
-                    'created_at': created_at,
-                    'issued_at': issued_at,
-                    'not_before': cert_info.get('NotBefore'),
-                    'not_after': cert_info.get('NotAfter'),
-                    'renewal_eligibility': cert_info.get('RenewalEligibility'),
-                    'key_usages': cert_info.get('KeyUsages', []),
-                    'extended_key_usages': cert_info.get('ExtendedKeyUsages', [])
-                })
+                                    'arn'                       : cert.get('CertificateArn'),
+                                    'domain_name'               : cert.get('DomainName'),
+                                    'subject_alternative_names' : cert_info.get('SubjectAlternativeNames', []),
+                                    'status'                    : cert_info.get('Status'),
+                                    'type'                      : cert_info.get('Type'),
+                                    'key_algorithm'             : cert_info.get('KeyAlgorithm'),
+                                    'signature_algorithm'       : cert_info.get('SignatureAlgorithm'),
+                                    'created_at'                : created_at,
+                                    'issued_at'                 : issued_at,
+                                    'not_before'                : cert_info.get('NotBefore'),
+                                    'not_after'                 : cert_info.get('NotAfter'),
+                                    'renewal_eligibility'       : cert_info.get('RenewalEligibility'),
+                                    'key_usages'                : cert_info.get('KeyUsages', []),
+                                    'extended_key_usages'       : cert_info.get('ExtendedKeyUsages', [])
+                                })
             return cert_data
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'certificate_manager': str(e)})
@@ -1531,13 +1572,13 @@ class AWSResourceManager:
             
             start_date_aware, end_date_aware = self._get_timezone_aware_dates()
             
-            response = AWSResponse(inspector.list_findings())
-            filtered_findings = []
+            response            = AWSResponse(inspector.list_findings())
+            filtered_findings   = []
             
             for finding in response.data.get('findings', []):
-                first_observed = finding.get('firstObservedAt')
-                last_observed = finding.get('lastObservedAt')
-                updated_at = finding.get('updatedAt')
+                first_observed  = finding.get('firstObservedAt')
+                last_observed   = finding.get('lastObservedAt')
+                updated_at      = finding.get('updatedAt')
                 
                 # Filter findings observed or updated within date range
                 if (first_observed and start_date_aware <= first_observed <= end_date_aware) or \
@@ -1545,75 +1586,26 @@ class AWSResourceManager:
                    (updated_at and start_date_aware <= updated_at <= end_date_aware):
                     
                     filtered_findings.append({
-                        'finding_arn': finding.get('findingArn'),
-                        'severity': finding.get('severity'),
-                        'status': finding.get('status'),
-                        'type': finding.get('type'),
-                        'title': finding.get('title'),
-                        'description': finding.get('description'),
-                        'first_observed_at': first_observed,
-                        'last_observed_at': last_observed,
-                        'updated_at': updated_at
-                    })
+                                                'finding_arn'       : finding.get('findingArn'),
+                                                'severity'          : finding.get('severity'),
+                                                'status'            : finding.get('status'),
+                                                'type'              : finding.get('type'),
+                                                'title'             : finding.get('title'),
+                                                'description'       : finding.get('description'),
+                                                'first_observed_at' : first_observed,
+                                                'last_observed_at'  : last_observed,
+                                                'updated_at'        : updated_at
+                                            })
             
             return filtered_findings
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'inspector': str(e)})
             return []
 
-    def get_trusted_advisor_security(self):
-        """Get Trusted Advisor security recommendations within date range"""
-        try:
-            support = boto3.client('support', region_name='us-east-1')
-            advisor_data = []
-            
-            start_date_aware, end_date_aware = self._get_timezone_aware_dates()
-            
-            # Test if premium support is available
-            try:
-                checks = AWSResponse(support.describe_trusted_advisor_checks(language='en'))
-                for check in checks.data.get('checks', []):
-                    if 'security' in check.get('category', '').lower():
-                        check_result = AWSResponse(support.describe_trusted_advisor_check_result(
-                            checkId=check.get('id'),
-                            language='en'
-                        ))
-                        
-                        result_data = check_result.data.get('result', {})
-                        timestamp = result_data.get('timestamp')
-                        
-                        if timestamp and isinstance(timestamp, str):
-                            try:
-                                from datetime import timezone
-                                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                            except (ValueError, AttributeError):
-                                # If conversion fails, include the check anyway
-                                timestamp = None
-                                
-                        # Filter by timestamp if available, otherwise include all
-                        if not timestamp or (start_date_aware <= timestamp <= end_date_aware):
-                            advisor_data.append({
-                                'check_id': check.get('id'),
-                                'name': check.get('name'),
-                                'description': check.get('description'),
-                                'category': check.get('category'),
-                                'status': result_data.get('status'),
-                                'resources_summary': result_data.get('resourcesSummary'),
-                                'flagged_resources': len(result_data.get('flaggedResources', [])),
-                                'timestamp': timestamp
-                            })
-            except ClientError as e:
-                raise e 
-                    
-            return advisor_data
-        except Exception as e:
-            self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'trusted_advisor_security': str(e)})
-            return []
-
     #7. Fetching data from Trusted Advisor
     def get_trusted_advisor(self):
         try:
-            support = boto3.client('support', region_name='us-east-1')
+            support         = boto3.client('support', region_name='us-east-1')
             recommendations = []
             
             start_date_aware, end_date_aware = self._get_timezone_aware_dates()
@@ -1627,30 +1619,29 @@ class AWSResourceManager:
                             checkId=check.get('id'), language='en'
                         ))
                         
-                        check_result = result.data.get('result', {})
-                        flagged_resources = check_result.get('flaggedResources', [])
-                        timestamp = check_result.get('timestamp')
+                        check_result        = result.data.get('result', {})
+                        flagged_resources   = check_result.get('flaggedResources', [])
+                        timestamp           = check_result.get('timestamp')
                         
                         # Filter by timestamp and only include checks with issues
                         if check_result.get('status') in ['warning', 'error'] and flagged_resources:
                             if timestamp and isinstance(timestamp, str):
                                 try:
-                                    from datetime import timezone
                                     timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                                 except (ValueError, AttributeError):
                                     # If conversion fails, include the check anyway
                                     timestamp = None
 
-                            if not timestamp or (start_date_aware <= timestamp <= end_date_aware):
+                            if not timestamp or (start_date_aware and end_date_aware and timestamp and start_date_aware <= timestamp <= end_date_aware):
                                 recommendations.append({
-                                    'check_name': check.get('name'),
-                                    'category': check.get('category'),
-                                    'severity': check_result.get('status'),
-                                    'recommendation': check.get('description'),
-                                    'affected_resources_count': len(flagged_resources),
-                                    'potential_savings': check_result.get('categorySpecificSummary', {}).get('costOptimizing', {}).get('estimatedMonthlySavings'),
-                                    'timestamp': timestamp
-                                })
+                                                        'check_name'                : check.get('name'),
+                                                        'category'                  : check.get('category'),
+                                                        'severity'                  : check_result.get('status'),
+                                                        'recommendation'            : check.get('description'),
+                                                        'affected_resources_count'  : len(flagged_resources),
+                                                        'potential_savings'         : check_result.get('categorySpecificSummary', {}).get('costOptimizing', {}).get('estimatedMonthlySavings'),
+                                                        'timestamp'                 : timestamp
+                                                    })
                     except Exception as e:
                         print(f"Error processing Trusted Advisor check {check.get('id', 'unknown')}: {str(e)}")
                         continue
@@ -1669,17 +1660,17 @@ class AWSResourceManager:
     #8. Fetching data from Application Signals
     def get_application_signals(self):
         try:
-            from datetime import timezone
-            signals = boto3.client('application-signals', region_name=REGION)
-            
-            start_date_aware, end_date_aware = self._get_timezone_aware_dates()
+            signals                             = boto3.client('application-signals', region_name=REGION)
+            start_date_aware, end_date_aware    = self._get_timezone_aware_dates()
             
             # Application Signals has a 24-hour limit, so adjust the time range
-            time_diff = end_date_aware - start_date_aware
-            if time_diff.total_seconds() > 24 * 3600:  # More than 24 hours
-                # Use last 24 hours instead
-                end_date_aware = datetime.now(timezone.utc)
-                start_date_aware = end_date_aware - timedelta(hours=23)  # 23 hours to be safe
+            if start_date_aware and end_date_aware:
+                time_diff = end_date_aware - start_date_aware
+
+                if time_diff.total_seconds() > 24 * 3600:  # More than 24 hours
+
+                    end_date_aware      = datetime.now(timezone.utc)
+                    start_date_aware    = end_date_aware - timedelta(hours=23)  # 23 hours to be safe
             
             # Use list_services with proper parameters
             response = AWSResponse(signals.list_services(
@@ -1688,13 +1679,13 @@ class AWSResourceManager:
                 MaxResults=100
             ))
             
-            result = [{
-                'service_name': service.get('ServiceName'),
-                'namespace': service.get('Namespace'),
-                'key_attributes': service.get('KeyAttributes', {}),
-                'attribute_map': service.get('AttributeMap', {}),
-                'metric_references': service.get('MetricReferences', [])
-            } for service in response.data.get('ServiceSummaries', [])]
+            result  = [{
+                        'service_name'      : service.get('ServiceName'),
+                        'namespace'         : service.get('Namespace'),
+                        'key_attributes'    : service.get('KeyAttributes', {}),
+                        'attribute_map'     : service.get('AttributeMap', {}),
+                        'metric_references' : service.get('MetricReferences', [])
+                    } for service in response.data.get('ServiceSummaries', [])]
 
             self.data.set_data(attr=AWSResourceType.APPLICATION, data=result)
             self.set_log(def_type=AWSResourceType.APPLICATION, status="Pass")
@@ -1707,9 +1698,9 @@ class AWSResourceManager:
     #9. Fetching Data from Resilience Hub
     def get_resilience_hub_apps(self):
         try:
-            resilience = boto3.client('resiliencehub', region_name=REGION)
-            response = AWSResponse(resilience.list_apps())
-            apps_data = []
+            resilience  = boto3.client('resiliencehub', region_name=REGION)
+            response    = AWSResponse(resilience.list_apps())
+            apps_data   = []
             
             start_date_aware, end_date_aware = self._get_timezone_aware_dates()
             
@@ -1721,29 +1712,29 @@ class AWSResourceManager:
                 if (creation_time and start_date_aware <= creation_time <= end_date_aware) or \
                    (last_assessment_time and start_date_aware <= last_assessment_time <= end_date_aware):
                     
-                    app_arn = app.get('appArn') #earlier was appArn
-                    app_data = {
-                        'app_arn': app_arn,
-                        'name': app.get('name'),
-                        'description': app.get('description'),
-                        'creation_time': creation_time,
-                        'last_assessment_time': last_assessment_time,
-                        'compliance_status': app.get('complianceStatus'),
-                        'resiliency_score': app.get('resiliencyScore'),
-                        'status': app.get('status'),
-                        'rpo': None,
-                        'rto': None,
-                        'last_drill': None,
-                        'cost': None
-                    }
+                    app_arn     = app.get('appArn') #earlier was appArn
+                    app_data    = {
+                                    'app_arn'               : app_arn,
+                                    'name'                  : app.get('name'),
+                                    'description'           : app.get('description'),
+                                    'creation_time'         : creation_time,
+                                    'last_assessment_time'  : last_assessment_time,
+                                    'compliance_status'     : app.get('complianceStatus'),
+                                    'resiliency_score'      : app.get('resiliencyScore'),
+                                    'status'                : app.get('status'),
+                                    'rpo'                   : None,
+                                    'rto'                   : None,
+                                    'last_drill'            : None,
+                                    'cost'                  : None
+                                }
                     
                     try:
                         # Get app details for RPO/RTO
                         app_details = AWSResponse(resilience.describe_app(appArn=app_arn))
-                        policy = app_details.data.get('app', {}).get('resiliencyPolicyArn')
+                        policy      = app_details.data.get('app', {}).get('resiliencyPolicyArn')
                         if policy:
-                            policy_details = AWSResponse(resilience.describe_resiliency_policy(policyArn=policy))
-                            policy_data = policy_details.data.get('policy', {}).get('policy', {})
+                            policy_details  = AWSResponse(resilience.describe_resiliency_policy(policyArn=policy))
+                            policy_data     = policy_details.data.get('policy', {}).get('policy', {})
                             if policy_data:
                                 app_data['rpo'] = policy_data.get('AZ', {}).get('rpoInSecs')
                                 app_data['rto'] = policy_data.get('AZ', {}).get('rtoInSecs')
@@ -1754,8 +1745,8 @@ class AWSResourceManager:
                             app_data['last_drill'] = tests.data['testRecommendations'][0].get('creationTime')
                         
                         # Get cost estimate
-                        cost_estimate = AWSResponse(resilience.describe_app_version_resources_resolution_status(appArn=app_arn, appVersion='release'))
-                        app_data['cost'] = cost_estimate.data.get('costEstimate', {}).get('cost')
+                        cost_estimate       = AWSResponse(resilience.describe_app_version_resources_resolution_status(appArn=app_arn, appVersion='release'))
+                        app_data['cost']    = cost_estimate.data.get('costEstimate', {}).get('cost')
                         
                     except Exception as e:
                         print(f"Error getting additional app details for {app_arn}: {str(e)}")
@@ -1772,7 +1763,7 @@ class AWSResourceManager:
     #10. Fetching Data from AWS Health
     def get_health(self):
         try:
-            health = boto3.client('health', region_name='us-east-1')  # Health is global
+            health      = boto3.client('health', region_name='us-east-1')  # Health is global
             health_data = []
             
             start_date_aware, end_date_aware = self._get_timezone_aware_dates()
@@ -1791,18 +1782,18 @@ class AWSResourceManager:
             
             for event in response.data.get('events', []):
                 health_data.append({
-                    'arn': event.get('arn'),
-                    'service': event.get('service'),
-                    'event_type_code': event.get('eventTypeCode'),
-                    'event_type_category': event.get('eventTypeCategory'),
-                    'region': event.get('region'),
-                    'availability_zone': event.get('availabilityZone'),
-                    'start_time': event.get('startTime'),
-                    'end_time': event.get('endTime'),
-                    'last_updated_time': event.get('lastUpdatedTime'),
-                    'status_code': event.get('statusCode'),
-                    'event_scope_code': event.get('eventScopeCode')
-                })
+                                    'arn'                   : event.get('arn'),
+                                    'service'               : event.get('service'),
+                                    'event_type_code'       : event.get('eventTypeCode'),
+                                    'event_type_category'   : event.get('eventTypeCategory'),
+                                    'region'                : event.get('region'),
+                                    'availability_zone'     : event.get('availabilityZone'),
+                                    'start_time'            : event.get('startTime'),
+                                    'end_time'              : event.get('endTime'),
+                                    'last_updated_time'     : event.get('lastUpdatedTime'),
+                                    'status_code'           : event.get('statusCode'),
+                                    'event_scope_code'      : event.get('eventScopeCode')
+                                })
             
             self.data.set_data(attr=AWSResourceType.HEALTH, data=health_data)
             self.set_log(def_type=AWSResourceType.HEALTH, status="Pass")
@@ -1816,17 +1807,17 @@ class AWSResourceManager:
         try:
             # Use only valid marketplace services
             marketplace_entitlement = boto3.client('marketplace-entitlement', region_name=REGION)
-            ce_client = boto3.client('ce')  # Cost Explorer for marketplace costs
+            ce_client               = boto3.client('ce')  # Cost Explorer for marketplace costs
             
-            marketplace_data = []
-            start_date_aware, end_date_aware = self._get_timezone_aware_dates()
+            marketplace_data                = []
+            start_date_aware, end_date_aware= self._get_timezone_aware_dates()
             
             try:
                 # Get marketplace costs from Cost Explorer
                 cost_response = AWSResponse(ce_client.get_cost_and_usage(
                     TimePeriod={
-                        'Start': start_date_aware.strftime('%Y-%m-%d'),
-                        'End': end_date_aware.strftime('%Y-%m-%d')
+                        'Start': start_date_aware.strftime('%Y-%m-%d') if start_date_aware else '',
+                        'End': end_date_aware.strftime('%Y-%m-%d') if end_date_aware else ''
                     },
                     Granularity='DAILY',
                     Metrics=['UnblendedCost'],
@@ -1852,13 +1843,13 @@ class AWSResourceManager:
                         if 'AWS Marketplace' in group.get('Keys', []):
                             cost_amount = float(group.get('Metrics', {}).get('UnblendedCost', {}).get('Amount', 0))
                             period_cost += cost_amount
-                            total_cost += cost_amount
+                            total_cost  += cost_amount
                     
                     if period_cost > 0:
                         daily_costs.append({
-                            'date': period_start,
-                            'cost': period_cost
-                        })
+                                                'date': period_start,
+                                                'cost': period_cost
+                                            })
                 
                 # Try to get entitlements (may fail if no marketplace products)
                 try:
@@ -1866,36 +1857,36 @@ class AWSResourceManager:
                     
                     for entitlement in entitlements_response.data.get('Entitlements', []):
                         marketplace_data.append({
-                            'product_code': entitlement.get('ProductCode'),
-                            'dimension': entitlement.get('Dimension'),
-                            'customer_identifier': entitlement.get('CustomerIdentifier'),
-                            'value': entitlement.get('Value'),
-                            'expiration_date': entitlement.get('ExpirationDate'),
-                            'cost_consumed': total_cost,
-                            'currency': 'USD',
-                            'period_start': start_date_aware.strftime('%Y-%m-%d'),
-                            'period_end': end_date_aware.strftime('%Y-%m-%d'),
-                            'daily_costs': daily_costs,
-                            'status': 'ACTIVE'
-                        })
+                                                    'product_code'          : entitlement.get('ProductCode'),
+                                                    'dimension'             : entitlement.get('Dimension'),
+                                                    'customer_identifier'   : entitlement.get('CustomerIdentifier'),
+                                                    'value'                 : entitlement.get('Value'),
+                                                    'expiration_date'       : entitlement.get('ExpirationDate'),
+                                                    'cost_consumed'         : total_cost,
+                                                    'currency'              : 'USD',
+                                                    'period_start'          : start_date_aware.strftime('%Y-%m-%d') if start_date_aware else '',
+                                                    'period_end'            : end_date_aware.strftime('%Y-%m-%d') if end_date_aware else '',
+                                                    'daily_costs'           : daily_costs,
+                                                    'status'                : 'ACTIVE'
+                                                })
                 
                 except Exception:
                     # If no entitlements but there are costs, create a generic entry
                     if total_cost > 0:
                         marketplace_data.append({
-                            'product_code': 'MARKETPLACE_USAGE',
-                            'product_name': 'AWS Marketplace Products',
-                            'dimension': 'Usage',
-                            'customer_identifier': None,
-                            'value': None,
-                            'expiration_date': None,
-                            'cost_consumed': total_cost,
-                            'currency': 'USD',
-                            'period_start': start_date_aware.strftime('%Y-%m-%d'),
-                            'period_end': end_date_aware.strftime('%Y-%m-%d'),
-                            'daily_costs': daily_costs,
-                            'status': 'CONSUMED'
-                        })
+                                                    'product_code'          : 'MARKETPLACE_USAGE',
+                                                    'product_name'          : 'AWS Marketplace Products',
+                                                    'dimension'             : 'Usage',
+                                                    'customer_identifier'   : None,
+                                                    'value'                 : None,
+                                                    'expiration_date'       : None,
+                                                    'cost_consumed'         : total_cost,
+                                                    'currency'              : 'USD',
+                                                    'period_start'          : start_date_aware.strftime('%Y-%m-%d') if start_date_aware else '',
+                                                    'period_end'            : end_date_aware.strftime('%Y-%m-%d') if end_date_aware else '',
+                                                    'daily_costs'           : daily_costs,
+                                                    'status'                : 'CONSUMED'
+                                                })
             
             except Exception as e:
                 print(f"Error getting marketplace costs: {str(e)}")
@@ -1914,27 +1905,27 @@ class AWSResourceManager:
             compute_optimizer = boto3.client('compute-optimizer', region_name=REGION)
             
             def create_standard_recommendation(account_id, resource_type, resource_arn, resource_name, finding, **kwargs):
-                return {
-                    'account_id': account_id,
-                    'resource_type': resource_type,
-                    'resource_arn': resource_arn,
-                    'resource_name': resource_name,
-                    'finding': finding,
-                    'current_instance_type': kwargs.get('current_instance_type'),
-                    'current_memory_size': kwargs.get('current_memory_size'),
-                    'current_volume_type': kwargs.get('current_volume_type'),
-                    'current_volume_size': kwargs.get('current_volume_size'),
-                    'recommended_instance_type': kwargs.get('recommended_instance_type'),
-                    'recommended_memory_size': kwargs.get('recommended_memory_size'),
-                    'recommended_volume_type': kwargs.get('recommended_volume_type'),
-                    'recommended_volume_size': kwargs.get('recommended_volume_size'),
-                    'savings_opportunity_percentage': kwargs.get('savings_opportunity_percentage'),
-                    'estimated_monthly_savings_usd': kwargs.get('estimated_monthly_savings_usd'),
-                    'performance_risk': kwargs.get('performance_risk'),
-                    'cpu_utilization_max': kwargs.get('cpu_utilization_max'),
-                    'memory_utilization_avg': kwargs.get('memory_utilization_avg'),
-                    'migration_effort': kwargs.get('migration_effort')
-                }
+                return  {
+                            'account_id'                    : account_id,
+                            'resource_type'                 : resource_type,
+                            'resource_arn'                  : resource_arn,
+                            'resource_name'                 : resource_name,
+                            'finding'                       : finding,
+                            'current_instance_type'         : kwargs.get('current_instance_type'),
+                            'current_memory_size'           : kwargs.get('current_memory_size'),
+                            'current_volume_type'           : kwargs.get('current_volume_type'),
+                            'current_volume_size'           : kwargs.get('current_volume_size'),
+                            'recommended_instance_type'     : kwargs.get('recommended_instance_type'),
+                            'recommended_memory_size'       : kwargs.get('recommended_memory_size'),
+                            'recommended_volume_type'       : kwargs.get('recommended_volume_type'),
+                            'recommended_volume_size'       : kwargs.get('recommended_volume_size'),
+                            'savings_opportunity_percentage': kwargs.get('savings_opportunity_percentage'),
+                            'estimated_monthly_savings_usd' : kwargs.get('estimated_monthly_savings_usd'),
+                            'performance_risk'              : kwargs.get('performance_risk'),
+                            'cpu_utilization_max'           : kwargs.get('cpu_utilization_max'),
+                            'memory_utilization_avg'        : kwargs.get('memory_utilization_avg'),
+                            'migration_effort'              : kwargs.get('migration_effort')
+                        }
             
             # Get EC2 recommendations
             try:
@@ -2001,29 +1992,29 @@ class AWSResourceManager:
             resources = []
             
             def create_standard_resource(service_name, resource_type, resource_id, resource_name, region, availability_zone, state, **kwargs):
-                return {
-                    'service_name': service_name,
-                    'resource_type': resource_type,
-                    'resource_id': resource_id,
-                    'resource_name': resource_name,
-                    'region': region,
-                    'availability_zone': availability_zone,
-                    'state': state,
-                    'instance_type': kwargs.get('instance_type'),
-                    'vpc_id': kwargs.get('vpc_id'),
-                    'engine': kwargs.get('engine'),
-                    'instance_class': kwargs.get('instance_class'),
-                    'multi_az': kwargs.get('multi_az'),
-                    'size_gb': kwargs.get('size_gb'),
-                    'volume_type': kwargs.get('volume_type'),
-                    'creation_date': kwargs.get('creation_date'),
-                    'type': kwargs.get('type'),
-                    'scheme': kwargs.get('scheme'),
-                    'instance_count': kwargs.get('instance_count'),
-                    'min_size': kwargs.get('min_size'),
-                    'max_size': kwargs.get('max_size'),
-                    'available_ip_count': kwargs.get('available_ip_count')
-                }
+                return  {
+                            'service_name'      : service_name,
+                            'resource_type'     : resource_type,
+                            'resource_id'       : resource_id,
+                            'resource_name'     : resource_name,
+                            'region'            : region,
+                            'availability_zone' : availability_zone,
+                            'state'             : state,
+                            'instance_type'     : kwargs.get('instance_type'),
+                            'vpc_id'            : kwargs.get('vpc_id'),
+                            'engine'            : kwargs.get('engine'),
+                            'instance_class'    : kwargs.get('instance_class'),
+                            'multi_az'          : kwargs.get('multi_az'),
+                            'size_gb'           : kwargs.get('size_gb'),
+                            'volume_type'       : kwargs.get('volume_type'),
+                            'creation_date'     : kwargs.get('creation_date'),
+                            'type'              : kwargs.get('type'),
+                            'scheme'            : kwargs.get('scheme'),
+                            'instance_count'    : kwargs.get('instance_count'),
+                            'min_size'          : kwargs.get('min_size'),
+                            'max_size'          : kwargs.get('max_size'),
+                            'available_ip_count': kwargs.get('available_ip_count')
+                        }
             
             # EC2 Instances
             ec2 = boto3.client('ec2', region_name=REGION)
@@ -2119,48 +2110,95 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SERVICE_RESOURCES, status="Fail", value={'service_resources': str(e)})
             return None
 
-    #14. Fetchin Inventory from Config
+    #14. Fetching Inventory from Config
+    # WILL NOT BE USED AS IT REPLICATES THE get_service_resources() data sets, currently a placeholder for future use
     def get_config_resource_inventory(self):
         try:
             # Use your existing service_resources data as inventory
-            service_resources = self.get_services_resources()
-            
+            #service_resources = self.get_services_resources()
+            service_resources = self.data.get_all_data()['service_resources']
             inventory_data = []
             for resource in service_resources or []:
                 inventory_data.append({
-                    'resource_type': resource.get('service_name', 'Unknown'),
-                    'resource_subtype': resource.get('resource_type', ''),
-                    'resource_id': resource.get('resource_id', ''),
-                    'resource_name': resource.get('resource_name', ''),
-                    'region': resource.get('region', REGION),
-                    'availability_zone': resource.get('availability_zone', ''),
-                    'state': resource.get('state', ''),
-                    'instance_type': resource.get('instance_type', ''),
-                    'instance_class': resource.get('instance_class', ''),
-                    'engine': resource.get('engine', ''),
-                    'vpc_id': resource.get('vpc_id', ''),
-                    'size_gb': resource.get('size_gb', 0),
-                    'volume_type': resource.get('volume_type', ''),
-                    'creation_date': resource.get('creation_date', ''),
-                    'multi_az': resource.get('multi_az', False),
-                    'scheme': resource.get('scheme', ''),
-                    'type': resource.get('type', ''),
-                    'instance_count': resource.get('instance_count', 0),
-                    'min_size': resource.get('min_size', 0),
-                    'max_size': resource.get('max_size', 0),
-                    'available_ip_count': resource.get('available_ip_count', 0)
-                })
+                                        'resource_type'     : resource.get('service_name', 'Unknown'),
+                                        'resource_subtype'  : resource.get('resource_type', ''),
+                                        'resource_id'       : resource.get('resource_id', ''),
+                                        'resource_name'     : resource.get('resource_name', ''),
+                                        'region'            : resource.get('region', REGION),
+                                        'availability_zone' : resource.get('availability_zone', ''),
+                                        'state'             : resource.get('state', ''),
+                                        'instance_type'     : resource.get('instance_type', ''),
+                                        'instance_class'    : resource.get('instance_class', ''),
+                                        'engine'            : resource.get('engine', ''),
+                                        'vpc_id'            : resource.get('vpc_id', ''),
+                                        'size_gb'           : resource.get('size_gb', 0),
+                                        'volume_type'       : resource.get('volume_type', ''),
+                                        'creation_date'     : resource.get('creation_date', ''),
+                                        'multi_az'          : resource.get('multi_az', False),
+                                        'scheme'            : resource.get('scheme', ''),
+                                        'type'              : resource.get('type', ''),
+                                        'instance_count'    : resource.get('instance_count', 0),
+                                        'min_size'          : resource.get('min_size', 0),
+                                        'max_size'          : resource.get('max_size', 0),
+                                        'available_ip_count': resource.get('available_ip_count', 0)
+                                    })
             
             self.data.set_data(attr=AWSResourceType.CONFIG_INVENTORY, data=inventory_data)
             self.set_log(def_type=AWSResourceType.CONFIG_INVENTORY, status="Pass")
-            return inventory_data
+            #return inventory_data
+            return []
             
         except Exception as e:
             self.set_log(def_type=AWSResourceType.CONFIG_INVENTORY, status="Fail", value={'config_inventory': str(e)})
             return []
 
+    #15. Fetching support tickets raised
+    def get_support_tickets(self):
+        try:
+            if not self.get_date():
+                return None
+                
+            support_client = boto3.client('support', region_name='us-east-1')  # Support API only available in us-east-1
+            
+            tickets = []
+            paginator = support_client.get_paginator('describe_cases')
+            
+            for page in paginator.paginate():
+                for case in page.get('cases', []):
+                    time_created = case.get('timeCreated')
+                    
+                    # Filter by date range if time_created exists
+                    if time_created and self.start_date <= time_created.replace(tzinfo=None) <= self.end_date:
+                        tickets.append({
+                            'case_id': case.get('caseId'),
+                            'display_id': case.get('displayId'),
+                            'subject': case.get('subject'),
+                            'status': case.get('status'),
+                            'severity_code': case.get('severityCode'),
+                            'service_code': case.get('serviceCode'),
+                            'category_code': case.get('categoryCode'),
+                            'time_created': time_created,
+                            'submitted_by': case.get('submittedBy'),
+                            'language': case.get('language', 'en')
+                        })
+            
+            support_data = {
+                'date_from': self.start_date.strftime('%Y-%m-%d') if self.start_date else '',
+                'date_to': self.end_date.strftime('%Y-%m-%d') if self.end_date else '',
+                'total_tickets': len(tickets),
+                'tickets': tickets
+            }
+            
+            self.data.set_data(attr=AWSResourceType.SUPPORT_TICKETS, data=support_data)
+            self.set_log(def_type=AWSResourceType.SUPPORT_TICKETS)
+            return support_data
+            
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.SUPPORT_TICKETS, status="Fail", value={'support_tickets': str(e)})
+            return None
+
+
 def get_data(interval="DAILY", start_date=None, end_date=None):
-    import time
     start_time = time.time()
     process_times = {}
     
@@ -2173,7 +2211,8 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
     start_date      = None
     
     interval        = interval
-    aws             = AWSResourceManager(account_id=account, interval=interval, start_date=start_date, end_date=end_date)
+
+    aws             = AWSResourceManager(account_id=account, interval=interval, start_date=start_date, end_date=end_date, region=REGION)
 
     
     #1. Fetch Account Data
@@ -2213,7 +2252,7 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
     
     #8. Fetch Application Signals Data
     step_start = time.time()
-    aws.get_application_signals()
+    #aws.get_application_signals()
     process_times['application_signals'] = round(time.time() - step_start, 2)
     
     #9. Fetch Resilience Hub Application Data
@@ -2228,7 +2267,7 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
     
     #11. Fetch Marketplace Data
     step_start = time.time()
-    aws.get_marketplace()
+    #aws.get_marketplace()
     process_times['marketplace'] = round(time.time() - step_start, 2)
     
     #12. Fetch Compute Optimizer Data
@@ -2242,9 +2281,12 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
     process_times['services_resources'] = round(time.time() - step_start, 2)
     
     #14. Get Config Inventory
+    """ This is a placeholder for future implmentation """
+
+    #13. Get Service Resources
     step_start = time.time()
-    aws.get_config_resource_inventory()
-    process_times['config_inventory'] = round(time.time() - step_start, 2)
+    aws.get_support_tickets()
+    process_times['support_tickets'] = round(time.time() - step_start, 2)
 
     #All. Get All Data
     step_start = time.time()
@@ -2275,12 +2317,10 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
     return result
 
 def load_current_data(interval="DAILY", end_date=None):
-    import time
-    start_time = time.time()
-    
-    data = get_data(interval=interval, end_date=end_date)
-    
+    start_time      = time.time()
+    data            = get_data(interval=interval, end_date=end_date)
     processing_time = round(time.time() - start_time, 2)
+    
     print(f"{TIMING} Current data load ({interval}) completed in {processing_time}s")
     
     # Add timing info to result if it's a dict
@@ -2322,42 +2362,44 @@ def load_historical_data(start_date=None, end_date=None):
     
     interval = "DAILY"
     
-    print(f"{CALENDAR}  Will process daily data from {start_date.strftime('%d-%m-%Y')} to {till_date.strftime('%d-%m-%Y')}")
+    print(f"{CALENDAR}  Processing daily data from {start_date.strftime('%d-%m-%Y')} to {till_date.strftime('%d-%m-%Y')}")
 
-    current = start_date
-    count = 0
-    total_processing_time = 0
-    processing_times = []
+    current                 = start_date
+    count                   = 0
+    total_processing_time   = 0
+    processing_times        = []
     
     while current <= till_date:
         formatted_date = current.strftime('%d-%m-%Y')
         day_start_time = time.time()
         
         try:
-            interval_start = time.time()
-            data = get_data(interval=interval, end_date=current)
-            interval_time = round(time.time() - interval_start, 2)
+            interval_start          = time.time()
+            data                    = get_data(interval=interval, end_date=current)
+            interval_time           = round(time.time() - interval_start, 2)
             
-            day_total_time = round(time.time() - day_start_time, 2)
-            total_processing_time += day_total_time
+            day_total_time          = round(time.time() - day_start_time, 2)
+            total_processing_time   += day_total_time
             
             # Ensure data is a dict before accessing get method
             if isinstance(data, dict):
                 processing_times.append({
-                    'date': formatted_date,
-                    'interval': interval,
-                    'processing_time': day_total_time,
-                    'details': data.get('processing_times', {})
-                })
+                                            'date'              : formatted_date,
+                                            'interval'          : interval,
+                                            'processing_time'   : day_total_time,
+                                            'details'           : data.get('processing_times', {})
+                                        })
             else:
                 processing_times.append({
-                    'date': formatted_date,
-                    'interval': interval,
-                    'processing_time': day_total_time,
-                    'details': {'error': 'No data returned'}
-                })
+                                            'date'              : formatted_date,
+                                            'interval'          : interval,
+                                            'processing_time'   : day_total_time,
+                                            'details'           : {'error': 'No data returned'}
+                                        })
             
-            print(f"{SUCCESS} {interval} : {formatted_date} Loaded (took {interval_time}s)")
+            size = data.get('size', 'Unknown') if isinstance(data, dict) else 'Unknown'
+            print(f"{SUCCESS} {interval} : {formatted_date} Loaded Size: {size} (took {interval_time}s)")
+
         except Exception as e:
             print(f"{ERROR} {interval} : {formatted_date} Not Loaded - {str(e)}")
             continue
@@ -2365,24 +2407,24 @@ def load_historical_data(start_date=None, end_date=None):
         finally:
             # Move to next day
             current += timedelta(days=1)
-            count += 1
+            count   += 1
 
-    overall_time = round(time.time() - overall_start_time, 2)
-    avg_time = round(total_processing_time / count if count > 0 else 0, 2)
+    overall_time    = round(time.time() - overall_start_time, 2)
+    avg_time        = round(total_processing_time / count if count > 0 else 0, 2)
     
     print(f"Historical data processing complete:")
     print(f"{TIMING} Total time: {overall_time}s")
     print(f"{TIMING} Average time per day: {avg_time}s")
     print(f"{CALENDAR} Days processed: {count}")
     
-    return {
-        "from": start_date.strftime('%d-%m-%Y'), 
-        "to": till_date.strftime('%d-%m-%Y'), 
-        "loaded": count,
-        "total_time": overall_time,
-        "avg_time": avg_time,
-        "processing_times": processing_times
-    }
+    return  {
+                "from"              : start_date.strftime('%d-%m-%Y'), 
+                "to"                : till_date.strftime('%d-%m-%Y'), 
+                "loaded"            : count,
+                "total_time"        : overall_time,
+                "avg_time"          : avg_time,
+                "processing_times"  : processing_times
+            }
 
 def process_data_status(has_daily, has_monthly, has_history, daily_data, monthly_data, history_data, load_time=None):
     daily_status    = f"{ERROR} No Daily Data"
@@ -2390,31 +2432,32 @@ def process_data_status(has_daily, has_monthly, has_history, daily_data, monthly
     history_status  = f"{ERROR} No Historical Data"
     
     if(has_daily and daily_data is not None):
-        daily_status    = f"{SUCCESS} Daily Data - {daily_data.get('path', 'Unknown')} Time-Taken: {load_time['daily_load_time']}"
+        size            = daily_data.get('size', 'Unknown')
+        daily_status    = f"{SUCCESS} Daily Data - {daily_data.get('path', 'Unknown')} Size: {size} Time: {load_time.get('daily_load_time', 0) if load_time else 0}s"
 
     if(has_monthly and monthly_data is not None):
-        monthly_status    = f"{SUCCESS} Monthly Data - {monthly_data.get('path', 'Unknown')} Time-Taken: {load_time['daily_load_time']}"
+        size            = monthly_data.get('size', 'Unknown')
+        monthly_status  = f"{SUCCESS} Monthly Data - {monthly_data.get('path', 'Unknown')} Size: {size} Time: {load_time.get('daily_load_time', 0) if load_time else 0}s"
 
     if(has_history and history_data is not None):
-        history_status  = f"{SUCCESS} {history_data.get('loaded', 0)} Historical Data Loaded between {history_data.get('from', '')} - {history_data.get('to', '')} Time-Taken: {load_time['historical_load_time']}"
+        history_status = f"{SUCCESS} {history_data.get('loaded', 0)} Historical Data Loaded between {history_data.get('from', '')} - {history_data.get('to', '')} Time: {load_time.get('historical_load_time', 0) if load_time else 0}s"
     
     return [daily_status, monthly_status, history_status]
 
 def lambda_handler(event=None, context=None):
-    import time
     start_time = time.time()
     
     #1. AWS Boto3 Permission Test
-    aws_permission = AWSBoto3Permissions()
+    aws_permission  = AWSBoto3Permissions()
     
-    has_daily     = False
-    has_monthly   = False
-    has_history   = False
-    daily_data    = None
-    monthly_data  = None
-    history_data  = None
-    status        = []
-    timing_info   = {}
+    has_daily       = False
+    has_monthly     = False
+    has_history     = False
+    daily_data      = None
+    monthly_data    = None
+    history_data    = None
+    status          = []
+    timing_info     = {}
 
     if aws_permission.test():
         print("*"*15,"Connected","*"*15)
@@ -2432,10 +2475,10 @@ def lambda_handler(event=None, context=None):
             print(f"{SUCCESS if(has_history) else ERROR} History Data (took {history_time}s)")
         else:
             print(f"{INFO} Loading Daily Data")
-            daily_start = time.time()
-            daily_data = load_current_data(interval="DAILY")
-            daily_time = round(time.time() - daily_start, 2)
-            timing_info['daily_load_time'] = daily_time
+            daily_start                     = time.time()
+            daily_data                      = load_current_data(interval="DAILY")
+            daily_time                      = round(time.time() - daily_start, 2)
+            timing_info['daily_load_time']  = daily_time
             
             if(daily_data and daily_data is not None and 'path' in daily_data):
                 has_daily = True
@@ -2447,6 +2490,7 @@ def lambda_handler(event=None, context=None):
 
         total_time                          = round(time.time() - start_time, 2)
         timing_info['total_execution_time'] = total_time
+
         print(f"{TIMING} Total execution time: {total_time}s")
         print("*"*14,"Disconnected","*"*13)
         
@@ -2455,10 +2499,10 @@ def lambda_handler(event=None, context=None):
             status.append(f"Execution time: {total_time}s")
         
         # If returning a dict instead of status list
-        result = {
-            'status': status,
-            'timing': timing_info
-        }
+        result =    {
+                        'status': status,
+                        'timing': timing_info
+                    }
         
         return result
 
@@ -2468,11 +2512,14 @@ if __name__ == "__main__":
     1. Run Historical Data Sets 
     - This will allow you to run data for a given period of time.
     """
-    start   = "30-9-2025"    # September 5 2025
-    end     = "6-10-2025"   # September 10 2025
+    start   = None
+    end     = None
+
+    start   = "08-12-2025"    # September 5 2025
+    #end     = "03-12-2025"   # September 10 2025
+
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     
     """ 2. Run Daily Data Sets """
     result  = lambda_handler({"history":False})
-
     #print(result)

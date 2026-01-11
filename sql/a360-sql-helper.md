@@ -1,6 +1,9 @@
+# This file is a utility guide for you to implement other tasks
 
+## 1. Drop all views within the database
+Copy paste it in the quyery editor to remove the views
 
-/* To Drop Views */
+```
 DROP VIEW IF EXISTS view_waf_rules_detailed;
 DROP VIEW IF EXISTS view_waf_rules;
 DROP VIEW IF EXISTS view_trusted_advisor_checks;
@@ -43,13 +46,23 @@ DROP VIEW IF EXISTS view_acct_log_messages;
 DROP VIEW IF EXISTS view_acct_cost_rep_forecast;
 DROP VIEW IF EXISTS view_acct_cost_rep;
 DROP VIEW IF EXISTS view_accounts;
+DROP VIEW IF EXISTS view_support_tickets;
+```
 
+## 2. Managing products via Query editor
 
--- Example Scripts: to Creating Products
+### 2.1 Creating products
+Example Scripts: to Creating Products
+
+```
 INSERT INTO products (name, owner, position, description) VALUES
 ('Cloud Infrastructure Platform', 'John Smith', 'Platform Engineering Manager', 'Core cloud infrastructure and platform services')
+```
 
--- Example Script: Associate accounts with products (each product gets 2 accounts)
+### 2.2 Associating products to accounts
+Example Script: Associate accounts with products (each product gets 2 accounts)
+
+```
 INSERT INTO product_accounts (product_id, account_id) 
 SELECT p.id, a.id 
 FROM products p 
@@ -59,30 +72,4 @@ AND (
   (p.name = 'Cloud Infrastructure Platform' AND a.account_id IN ('123456789012', '234567890123')) OR
   (p.name = 'Data Analytics Suite' AND a.account_id IN ('345678901234', '456789012345')) 
 );
-
--- Update the logs_messages
--- Run one by one
--- 1. Drop views that use log_messages
-DROP VIEW IF EXISTS view_acct_log_messages;
-
--- 2. Alter the column
-ALTER TABLE log_messages ALTER COLUMN message_type TYPE TEXT;
-
--- 3. Recreate the views (run your view creation script)
-CREATE OR REPLACE VIEW view_acct_log_messages AS
-SELECT
-    lm.*,
-    a.account_id as account,
-    a.account_name,
-    CONCAT (a.account_id, '-', a.account_name) as account_full,
-    p.name as project_product_name
-FROM
-    log_messages lm
-    JOIN logs l ON lm.log_id = l.id
-    JOIN accounts a ON l.account_id = a.id
-    LEFT JOIN (
-        SELECT DISTINCT ON (account_id) account_id, product_id
-        FROM product_accounts
-        ORDER BY account_id, id
-    ) pa ON a.id = pa.account_id
-    LEFT JOIN products p ON pa.product_id = p.id;
+```

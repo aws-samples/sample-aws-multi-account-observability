@@ -1,3 +1,7 @@
+""" ONLY FOR DEVELOPMENT REMOVE ON LAMBDA """
+""" from dotenv import load_dotenv, dotenv_values 
+load_dotenv() """
+
 """ IMPORTS """
 import boto3
 import sys
@@ -5,6 +9,7 @@ import json
 import os
 from typing import List, Dict, Any, Optional, Union
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from functools import lru_cache
@@ -13,7 +18,7 @@ from typing import Dict, List, Any, Optional, Union
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
+import threading
 
 
 
@@ -28,7 +33,7 @@ TIMING      = "⏱️"  # Clock
 DB_NAME     = os.environ.get("DB_NAME")
 ARN_AURORA  = os.environ.get("AURORA_CLUSTER_ARN")
 ARN_SECRET  = os.environ.get("AURORA_SECRET_ARN")
-REGION      = os.environ.get("REGION")
+REGION      = os.environ.get("REGION") #boto3.client('sts').meta.region_name
 BUCKET      = os.environ.get("BUCKET")
 KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
 
@@ -96,29 +101,33 @@ TYPE_CASTING    =   {
 """ 1. TEST PERMISSIONS FOR AWS SERVICES """
 class AWSBoto3Permissions:
     def __init__(self, params=None):
+        self.boto3_config           = Config(connect_timeout=5,read_timeout=10,retries={'max_attempts': 2})
+        self.boto3_config_optional  = Config(connect_timeout=2,read_timeout=3, retries={'max_attempts': 0})
+
         # Get current date and 30 days ago for CE
         self.end_date 		= datetime.now()
         self.start_date 	= self.end_date - timedelta(days=30)
         self.aws_services 	= {
-                                    'sts'                : {
+                                    'sts'               : {
                                                             'name'      : 'STS',
-                                                            'client'    : boto3.client('sts'),
+                                                            'client'    : boto3.client('sts', region_name=REGION, config=self.boto3_config),
                                                             'action'    : 'get_caller_identity',
                                                             'params'    : params,
                                                             'status'    : False,
                                                             "reqd"      : True
+                                                            
                                                         },
-                                    'account'            : {
+                                    'account'           : {
                                                             'name'      : 'Account',
-                                                            'client'    : boto3.client('account'),
+                                                            'client'    : boto3.client('account', region_name=REGION, config=self.boto3_config_optional),
                                                             'action'    : 'get_contact_information',
                                                             'params'    : params,
                                                             'status'    : False,
                                                             "reqd"      : False
                                                         },
-                                    'rds-data'           : {
+                                    'rds-data'          : {
                                                             'name'      : 'Aurora RDS',
-                                                            'client'    : boto3.client('rds-data', region_name=REGION),
+                                                            'client'    : boto3.client('rds-data', region_name=REGION, config=self.boto3_config),
                                                             'action'    : 'close',
                                                             'params'    : params,
                                                             'status'    : False,
@@ -126,7 +135,7 @@ class AWSBoto3Permissions:
                                                         },
                                     's3'                : {
                                                             'name'      : 's3',
-                                                            'client'    : boto3.client('s3', region_name=REGION),
+                                                            'client'    : boto3.client('s3', region_name=REGION, config=self.boto3_config),
                                                             'action'    : 'close',
                                                             'params'    : params,
                                                             'status'    : False,
@@ -138,12 +147,11 @@ class AWSBoto3Permissions:
         if not reqd:
             return "Optional"
         else:
-            return "Required" 
+            return "Required"
 
     def _check(self, service):
+        is_opt = self._is_optional(service["reqd"])
         try:
-            is_opt = self._is_optional(service["reqd"])
-
             if service["params"]:
                 service["client"].__getattribute__(service["action"])(
                     **service["params"]
@@ -176,7 +184,10 @@ class AWSBoto3Permissions:
             if val["status"] == True:
                 passed += 1
             elif val["status"] == False:
-                failed += 1
+                if(val['reqd'] == False):
+                    passed += 1
+                else:
+                    failed += 1
 
             counter += 1
 
@@ -213,6 +224,7 @@ class AWSResourceType(str, Enum):
     COMPUTE_OPTIMIZER   = "Compute Optimnizer"
     SERVICE_RESOURCES   = "Service Resources"
     CONFIG_INVENTORY    = "Config Inventory"
+    SUPPORT_TICKETS     = "Support Tickets"
     LOGS                = "Logs"
 
 """ 2. S3 MANAGER : Wrapper class to interact with the S3 Bucket """
@@ -266,7 +278,7 @@ class S3Manager:
 
     def delete_files(self, file_path) -> bool:
         try:
-            self.move_to_processed(file_path)
+            return self.move_to_processed(file_path)
         except Exception as e:
             print(f"{ERROR} Failed to delete {file_path}: {e}")
             return False
@@ -275,17 +287,17 @@ class S3Manager:
 class DBManager:
     __slots__ = ('database', 'client', 'cluster_arn', 'secret_arn', '_base_params')
     
-    def __init__(self, database_name: str, cluster_arn: str = None, secret_arn: str = None):
+    def __init__(self, database_name: str, cluster_arn: Optional[str] = None, secret_arn: Optional[str] = None):
         self.database       = database_name
         self.client         = boto3.client('rds-data', region_name=REGION)
         self.cluster_arn    = cluster_arn or os.environ['AURORA_CLUSTER_ARN']
         self.secret_arn     = secret_arn or os.environ['AURORA_SECRET_ARN']
         
         # Pre-compute base parameters
-        self._base_params = {
-            'resourceArn': self.cluster_arn,
-            'secretArn': self.secret_arn,
-            'database': self.database
+        self._base_params: Dict[str, Any] = {
+            'resourceArn'   : self.cluster_arn,
+            'secretArn'     : self.secret_arn,
+            'database'      : self.database
         }
 
     def _format_parameters(self, params: Dict[str, Any]) -> List[Dict]:
@@ -308,13 +320,6 @@ class DBManager:
                     return pg_type
         return None
 
-
-    @staticmethod
-    def _validate_sql_identifier(identifier: str) -> bool:
-        """Validate SQL identifier to prevent injection"""
-        
-        return bool(re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', identifier))
-        
 
     @staticmethod
     def _validate_sql_identifier(identifier: str) -> bool:
@@ -365,12 +370,14 @@ class DBManager:
             for record in records
         ]
         
-        return results[0] if single and results else results
+        if single:
+            return results[0] if results else None
+        return results
 
     def execute_statement(self, sql: str, params: Optional[Dict] = None) -> Dict:
         """Optimized execution"""
-        exec_params = self._base_params.copy()
-        exec_params['sql'] = sql
+        exec_params         = self._base_params.copy()
+        exec_params['sql']  = sql
         
         if params:
             exec_params['parameters'] = self._format_parameters(params)
@@ -380,9 +387,10 @@ class DBManager:
     def select(self, query: str, params: Optional[Dict] = None) -> List[Dict]:
         """Fast select multiple"""
         try:
-            response = self.execute_statement(query, params)
-            columns = self._extract_columns(query)
-            return self._format_results(response, columns)
+            response    = self.execute_statement(query, params)
+            columns     = self._extract_columns(query)
+            result      = self._format_results(response, columns)
+            return result if isinstance(result, list) else []
         except Exception as e:
             print(f"{ERROR} Select error: {e}")
             return []
@@ -390,15 +398,17 @@ class DBManager:
     def select_one(self, query: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """Fast select single"""
         try:
-            response = self.execute_statement(query, params)
-            columns = self._extract_columns(query)
-            return self._format_results(response, columns, single=True)
+            response    = self.execute_statement(query, params)
+            columns     = self._extract_columns(query)
+            result      = self._format_results(response, columns, single=True)
+
+            return result if isinstance(result, dict) else None
         except Exception as e:
             print(f"{ERROR} Select one error: {e}")
             return None
 
     # Update & Insert = Upsert, this is used to update or insert into the Database
-    def upsert(self, table: str, data: Dict, unique_keys: Union[str, List[str]], stats: Dict = None) -> str:
+    def upsert(self, table: str, data: Dict, unique_keys: Union[str, List[str]], stats: Optional[Dict] = None) -> str:
         """Generic upsert method with type casting and flexible updated_at"""
         try:
             if not self._validate_sql_identifier(table):
@@ -429,7 +439,7 @@ class DBManager:
             where_clause = ' AND '.join(where_conditions)
             
             # Check if record exists
-            existing = self.select_one(f"SELECT id FROM {table} WHERE {where_clause}", where_params) # nosec B608
+            existing = self.select_one(f"SELECT id FROM {table} WHERE {where_clause}", where_params)  # nosec B608
             
             if existing:
                 # Update existing - build typed SET clause
@@ -444,7 +454,7 @@ class DBManager:
                 
                 if update_fields:
                     # Only add updated_at if table has it (check by trying to describe table)
-                    update_query = f"UPDATE {table} SET {', '.join(update_fields)} WHERE {where_clause}" # nosec B608
+                    update_query = f"UPDATE {table} SET {', '.join(update_fields)} WHERE {where_clause}"  # nosec B608
                     self.execute_statement(update_query, {**data, **where_params})
                     if stats: stats['UPDATED'] += 1
                     return 'updated'
@@ -462,7 +472,7 @@ class DBManager:
                     else:
                         placeholders.append(f":{col}")
                 
-                query = f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join(placeholders)})"# nosec B608
+                query = f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join(placeholders)})"  # nosec B608
                 result = self.execute_statement(query, data)
                 
                 if result:
@@ -483,18 +493,23 @@ class DBManager:
 class CoreManager:
     def __init__(self):
         self.sts_client = boto3.client('sts')
-        self.db         = DBManager(database_name=DB_NAME, cluster_arn=ARN_AURORA, secret_arn=ARN_SECRET)
+        self.db         = DBManager(database_name=DB_NAME or '', cluster_arn=ARN_AURORA, secret_arn=ARN_SECRET)
         self.stats      = {'CREATED': 0, 'UPDATED': 0, 'SKIPPED': 0, 'TOTAL': 0, 'LOADED': 0}
         self.curr_acct  = None  
 
     def set_log(self, log_type:AWSLogType, topic:AWSResourceType, msg=None):
         message = msg if msg is not None else "Data Loaded"
+        if self.curr_acct is None:
+            account_id = "Unknown"
+        else:
+            account_id = self.curr_acct['account_id']
+        
         if log_type == "WARN":
-            print(f"{FAIL} {self.curr_acct['account_id']}/{topic.value} : {message}")
+            print(f"{FAIL} {account_id}/{topic.value} : {message}")
         elif log_type == "ERROR":
-            print(f"{ERROR} {self.curr_acct['account_id']}/{topic.value} Error : {message}")
+            print(f"{ERROR} {account_id}/{topic.value} Error : {message}")
         #else:
-        #    print(f"{SUCCESS} {self.curr_acct['account_id']}/{topic.value} : {message}")
+        #    print(f"{SUCCESS} {account_id}/{topic.value} : {message}")
 
     def validate_data_structure(self, data: Dict) -> bool:
         """Validate required attributes exist"""
@@ -508,16 +523,18 @@ class CoreManager:
     def _get_default_account(self, key: str, account_id: str) -> str:
         """Get default values for null fields"""
         defaults = {
-            'account_name': 'Unknown',
-            'account_email': 'unknown@example.com',
-            'account_status': 'ACTIVE',
-            'account_arn': f"arn:aws:organizations::{account_id}:account",
-            'joined_method': 'CREATED',
-            'csp': 'AWS',
-            'account_type': 'PRODUCTION',
-            'joined_timestamp': '1970-01-01T00:00:00Z'
+            'account_name'      : 'Unknown',
+            'account_email'     : 'unknown@example.com',
+            'account_status'    : 'ACTIVE',
+            'account_arn'       : f"arn:aws:organizations::{account_id}:account",
+            'joined_method'     : 'CREATED',
+            'csp'               : 'AWS',
+            'account_type'      : 'PRODUCTION',
+            'joined_timestamp'  : '1970-01-01T00:00:00Z'
         }
         return defaults.get(key, '')
+    
+
     
     #Method: UPSERT
     def load_account_data(self, data: Dict) -> bool:
@@ -528,36 +545,43 @@ class CoreManager:
                 account_data = {}
                 for k, v in data.items():
                     
-                    if k in ['account_type', 'category', 'customer_name', 'partner_name' ] and v and v != 'None':
+                    # Load product if exists
+                    if k in ['account_type', 'category', 'customer_name', 'partner_name'] and v and v != 'None':
                         account_data[k] = v
                     
-                    elif k not in ['contact_info', 'alternate_contacts']:
-                        account_data[k]                 = v if v is not None else self._get_default_account(k, data.get('account_id'))
-                        account_data["csp"]             = self._get_default_account("csp", "AWS")
+                    elif k not in ['contact_info', 'alternate_contacts', 'product']:
+                        account_data[k]     = v if v is not None else self._get_default_account(k, data.get('account_id', ''))
+                        account_data["csp"] = self._get_default_account("csp", "AWS")
 
                 # Upsert account
-                result = self.db.upsert('accounts', account_data, 'account_id', self.stats)
+                result = self.db.upsert('accounts', account_data, ['account_id', 'region'], self.stats)
                 
                 # Get current account for other operations
                 if result in ['created', 'updated']:
-                    self.curr_acct = self.db.select_one(
-                        "SELECT id, account_id FROM accounts WHERE account_id = :account_id",
-                        {'account_id': data['account_id']}
+                    account_result = self.db.select_one(
+                        "SELECT id, account_id FROM accounts WHERE account_id = :account_id AND region = :region",
+                        {'account_id': data['account_id'], 'region':data['region']}
                     )
+                    if account_result:
+                        self.curr_acct = account_result
+
+                # Load product if exists (AFTER curr_acct is set)
+                if 'product' in data and data['product'] and self.curr_acct is not None:
+                    self.load_product_data(data['product'])
             
             # Process contact info (child)
             contact = data.get('contact_info', {})
-            if contact and any(v is not None for v in contact.values()):
-                contact['account_id'] = data['account_id']
+            if contact and any(v is not None for v in contact.values()) and self.curr_acct is not None:
+                contact['account_id'] = self.curr_acct['id']
                 self.db.upsert('contact_info', contact, 'account_id', self.stats)
             
             # Process alternate contacts (children)
             alt_contacts = data.get('alternate_contacts', {})
-            if alt_contacts:
+            if alt_contacts and self.curr_acct is not None:
                 for contact_type, contact_data in alt_contacts.items():
                     if contact_data:
                         contact_record = {
-                            'account_id'    : data['account_id'],
+                            'account_id'    : self.curr_acct['id'],
                             'contact_type'  : contact_type,
                             'full_name'     : contact_data.get('name'),
                             'title'         : contact_data.get('title'),
@@ -570,6 +594,62 @@ class CoreManager:
         except Exception as e:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.ACCOUNT, msg=e)
             return False
+    
+    #Method: UPSERT
+    def load_product_data(self, product_name: str) -> bool:
+        """Load products (comma-delimited) and link to account"""
+        try:
+            if not self.curr_acct or not product_name:
+                return False
+            
+            # Split by comma and process each product
+            products = [p.strip() for p in product_name.split(',') if p.strip()]
+            
+            # Get product IDs for new products
+            new_product_ids = []
+            for prod in products:
+                if self._load_product(prod):
+                    product = self.db.select_one("SELECT id FROM products WHERE LOWER(name) = LOWER(:name)", {'name': prod})
+                    if product:
+                        new_product_ids.append(product['id'])
+            
+            # Remove old product links not in new list
+            if new_product_ids:
+                placeholders            = ','.join([f':id{i}' for i in range(len(new_product_ids))])
+                params                  = {f'id{i}': pid for i, pid in enumerate(new_product_ids)}
+                params['account_id']    = self.curr_acct['id']
+                
+                self.db.execute_statement(f"DELETE FROM product_accounts WHERE account_id = :account_id AND product_id NOT IN ({placeholders})", params)  # nosec B608
+
+            
+            return True
+        except Exception as e:
+            print(f"{ERROR} Product load error: {e}")
+            return False
+    
+    def _load_product(self, product_name: str) -> bool:
+        """Load single product and link to account"""
+        try:
+            # Check if product exists (case-insensitive)
+            product = self.db.select_one("SELECT id FROM products WHERE LOWER(name) = LOWER(:name)", {'name': product_name})
+            
+            if product:
+                # Update existing product
+                self.db.upsert('products', {'id': product['id'], 'name': product_name, 'owner': 'System'}, 'id', self.stats)
+            else:
+                # Create new product
+                self.db.upsert('products', {'name': product_name, 'owner': 'System'}, 'name', self.stats)
+                product = self.db.select_one("SELECT id FROM products WHERE LOWER(name) = LOWER(:name)", {'name': product_name})
+            
+            if product and self.curr_acct is not None:
+                # Link product to account
+                self.db.upsert('product_accounts', 
+                              {'product_id': product['id'], 'account_id': self.curr_acct['id']}, 
+                              ['product_id', 'account_id'], self.stats)
+            return True
+        except Exception as e:
+            print(f"{ERROR} Single product load error: {e}")
+            return False
     #Method: UPSERT
     def load_config_data(self, data: Dict) -> bool:
         """Load config data with parent-child upsert like inventory"""
@@ -578,12 +658,12 @@ class CoreManager:
                 print(f"{ERROR} No account loaded")
                 return False
             
-            config_map = {}  # Map config_report_id
-            non_compliant = data.pop('non_compliant_resources', [])
+            config_map      = {}  # Map config_report_id
+            non_compliant   = data.pop('non_compliant_resources', [])
             
             # Load config report first (parent)
-            data['account_id'] = self.curr_acct['id']
-            result = self.db.upsert('config_reports', data, ['account_id', 'date_from'], self.stats)
+            data['account_id']  = self.curr_acct['id']
+            result              = self.db.upsert('config_reports', data, ['account_id', 'date_from'], self.stats)
             
             # Get config_report_id for resources - FIX: Add ::date casting
             if result in ['created', 'updated']:
@@ -595,16 +675,53 @@ class CoreManager:
                     config_map['config_report_id'] = db_config['id']
             
             # Load non-compliant resources (children)
-            if non_compliant and config_map:
-                config_report_id = config_map['config_report_id']
+            if config_map:
+                config_report_id    = config_map['config_report_id']
+                new_resource_keys   = {
+                                        (resource['rule_name'], resource['resource_id'], resource['resource_type']) 
+                                        for resource in non_compliant
+                                      }
+                # Implementing Check to update teh status : Getting current resource id
+                #print("New Resources: ", new_resource_keys, "Count:", len(new_resource_keys))
                 
-                for resource in non_compliant:
-                    resource.pop('annotation', None)
-                    resource.pop('config_rule_invoked_time', None)
-                    resource['created_at'] = resource.pop('error_date', None)
+                if new_resource_keys:
+                    # Build dynamic placeholders for composite key matching
+                    placeholders = ','.join([f'(:rule{i}, :res{i}, :type{i})' for i in range(len(new_resource_keys))])
+                    params = {}
+                    for i, (rule, res_id, res_type) in enumerate(new_resource_keys):
+                        params[f'rule{i}']  = rule
+                        params[f'res{i}']   = res_id
+                        params[f'type{i}']  = res_type
+                    
+                    #self.db.execute_statement( # nosec B608
+                    #    f"""UPDATE non_compliant_resources 
+                    #        SET status = 'RESOLVED', compliance_type = 'COMPLIANT'
+                    #        WHERE config_report_id IN (
+                    #            SELECT id FROM config_reports WHERE account_id = :account_id
+                    #        ) 
+                    #        AND (rule_name, resource_id, resource_type) NOT IN ({placeholders})""",
+                    #    {**params, 'account_id': self.curr_acct['id']}
+                    #) # nosec B608
 
-                    resource['config_report_id'] = config_report_id
-                    self.db.upsert('non_compliant_resources', resource, ['config_report_id', 'resource_id'], self.stats)
+                    self.db.execute_statement(f"UPDATE non_compliant_resources SET status = 'RESOLVED', compliance_type = 'COMPLIANT' WHERE config_report_id IN (SELECT id FROM config_reports WHERE account_id = :account_id) AND (rule_name, resource_id, resource_type) NOT IN ({placeholders})", {**params, 'account_id': self.curr_acct['id']})  # nosec B608
+
+                else:
+                    # Empty array = all previous resources are now compliant
+                    self.db.execute_statement(
+                        """UPDATE non_compliant_resources 
+                        SET status = 'RESOLVED', compliance_type = 'COMPLIANT'
+                        WHERE config_report_id IN (
+                            SELECT id FROM config_reports WHERE account_id = :account_id
+                        )""",
+                        {'account_id': self.curr_acct['id']}
+                    )
+
+                for resource in non_compliant:
+                    resource['created_at']          = resource.pop('config_rule_invoked_time', None)
+                    resource['config_report_id']    = config_report_id
+                    resource['status']              = 'OPEN'
+
+                    self.db.upsert('non_compliant_resources', resource, ['config_report_id', 'resource_id', 'rule_name', 'rule_type'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.CONFIG)
             return True
@@ -630,15 +747,15 @@ class CoreManager:
             if isinstance(data, list):
                 for service in data:
                     # Filter to only schema fields
-                    filtered_service = {k: v for k, v in service.items() if k in service_fields}
-                    filtered_service['account_id'] = self.curr_acct['id']
+                    filtered_service                = {k: v for k, v in service.items() if k in service_fields}
+                    filtered_service['account_id']  = self.curr_acct['id']
                     
                     # Convert usage_types array to comma-separated string
                     if 'usage_types' in filtered_service and isinstance(filtered_service['usage_types'], list):
-                        filtered_service['usage_types'] = ','.join(filtered_service['usage_types'])
+                        filtered_service['usage_types'] = ','.join(str(item) for item in filtered_service['usage_types'])
                     
                     # Upsert using composite unique key
-                    self.db.upsert('services', filtered_service, ['account_id', 'service', 'date_from'], self.stats)
+                    self.db.upsert('services', filtered_service, ['account_id', 'service', 'usage_types', 'date_from'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SERVICE)
             return True
@@ -661,15 +778,16 @@ class CoreManager:
             period = data.pop('period', {})
             
             # Load cost report first (parent)
-            cost_report = {
-                **data,
-                'account_id': self.curr_acct['id'],
-                'period_start': period.get('start'),
-                'period_end': period.get('end'),
-                'period_granularity': period.get('granularity')
-            }
+            cost_report =   {
+                                **data,
+                                'account_id'        : self.curr_acct['id'],
+                                'period_start'      : period.get('start'),
+                                'period_end'        : period.get('end'),
+                                'period_granularity': period.get('granularity')
+                            }
             
             result = self.db.upsert('cost_reports', cost_report, ['account_id', 'period_start'], self.stats)
+
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Cost Reports Loaded")
 
             # Get cost_report_id for children
@@ -686,11 +804,11 @@ class CoreManager:
                 cost_report_id = cost_map['cost_report_id']
                 
                 for service in top_services:
-                    service_data = {
-                        'cost_report_id': cost_report_id,
-                        'service_name': service['service'],
-                        'cost': service['cost']
-                    }
+                    service_data =  {
+                                        'cost_report_id': cost_report_id,
+                                        'service_name'  : service['service'],
+                                        'cost'          : service['cost']
+                                    }
                     self.db.upsert('service_costs', service_data, ['cost_report_id', 'service_name'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Service Cost Loaded")
 
@@ -700,11 +818,12 @@ class CoreManager:
                 
                 for forecast in forecasts:
                     forecast_data = {
-                        'cost_report_id': cost_report_id,
-                        'period_start': forecast['period']['start'],
-                        'period_end': forecast['period']['end'],
-                        'amount': forecast['amount']
-                    }
+                                        'cost_report_id': cost_report_id,
+                                        'period_start'  : forecast['period']['start'],
+                                        'period_end'    : forecast['period']['end'],
+                                        'amount'        : forecast['amount']
+                                    }
+                    
                     self.db.upsert('cost_forecasts', forecast_data, ['cost_report_id', 'period_start'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Cost Forecast Loaded")
 
@@ -719,57 +838,48 @@ class CoreManager:
         """Load comprehensive security data with blazing fast upserts"""
         try:
             # Define schema fields for each security service
-            guard_duty_fields = {
-                'account_id', 'detector_id', 'finding_type', 'severity', 
-                'title', 'description', 'confidence', 'region'
-            }
-            
-            kms_fields = {
-                'account_id', 'key_id', 'arn', 'description', 'key_usage', 
-                'key_state', 'creation_date', 'enabled', 'key_rotation_enabled'
-            }
-            
-            waf_fields = {
-                'account_id', 'name', 'waf_id', 'arn', 'scope', 'description', 
-                'default_action', 'rules_count', 'logging_enabled', 
-                'geo_blocking_enabled', 'blocked_countries'
-            }
-            
-            waf_rules_detailed_fields = {
-                'account_id', 'web_acl_name', 'rule_name', 'priority', 'action',
-                'statement_type', 'is_managed_rule', 'is_custom_rule', 'rate_limit',
-                'logging_enabled', 'geo_blocking', 'sql_injection', 'sample_request_enabled',
-                'cloudwatch_enabled', 'has_xss_protection', 'waf_version', 'is_compliant', 'scope'
-            }
-            
-            cloudtrail_fields = {
-                'account_id', 'name', 'arn', 'is_logging', 'is_multi_region', 
-                's3_bucket', 'kms_key_id', 'log_file_validation', 'latest_delivery_time'
-            }
-            
-            secrets_fields = {
-                'account_id', 'name', 'arn', 'description', 'created_date', 
-                'last_changed_date', 'rotation_enabled'
-            }
-            
-            cert_fields = {
-                'account_id', 'arn', 'domain_name', 'status', 'type', 'not_after'
-            }
-            
-            inspector_fields = {
-                'account_id', 'finding_arn', 'severity', 'status', 'type', 
-                'title', 'description', 'first_observed_at'
-            }
-             
-            finding_fields = {
-                'security_id', 'finding_id', 'service', 'title', 'description',
-                'severity', 'status', 'resource_type', 'resource_id', 'created_at',
-                'updated_at', 'recommendation', 'compliance_status', 'region',
-                'workflow_state', 'record_state', 'product_name', 'company_name',
-                'product_arn', 'generator_id', 'generator'
-            }
-            
-            security_map = {}  # Load Security Hub summaries first (parent), Map service to security_id Map service to security_id
+            guard_duty_fields           =   {
+                                                'account_id', 'detector_id', 'finding_type', 'severity', 
+                                                'title', 'description', 'confidence', 'region'
+                                            }
+            kms_fields                  =   {
+                                                'account_id', 'key_id', 'arn', 'description', 'key_usage', 
+                                                'key_state', 'creation_date', 'enabled', 'key_rotation_enabled'
+                                            }
+            waf_fields                  =   {
+                                                'account_id', 'name', 'waf_id', 'arn', 'scope', 'description', 
+                                                'default_action', 'rules_count', 'logging_enabled', 
+                                                'geo_blocking_enabled', 'blocked_countries'
+                                            }
+            waf_rules_detailed_fields   =   {
+                                                'account_id', 'web_acl_name', 'rule_name', 'priority', 'action',
+                                                'statement_type', 'is_managed_rule', 'is_custom_rule', 'rate_limit',
+                                                'logging_enabled', 'geo_blocking', 'sql_injection', 'sample_request_enabled',
+                                                'cloudwatch_enabled', 'has_xss_protection', 'waf_version', 'is_compliant', 'scope'
+                                            }
+            cloudtrail_fields           =   {
+                                                'account_id', 'name', 'arn', 'is_logging', 'is_multi_region', 
+                                                's3_bucket', 'kms_key_id', 'log_file_validation', 'latest_delivery_time'
+                                            }
+            secrets_fields              =   {
+                                                'account_id', 'name', 'arn', 'description', 'created_date', 
+                                                'last_changed_date', 'rotation_enabled'
+                                            }
+            cert_fields                 =   {
+                                                'account_id', 'arn', 'domain_name', 'status', 'type', 'not_after'
+                                            }
+            inspector_fields            =   {
+                                                'account_id', 'finding_arn', 'severity', 'status', 'type', 
+                                                'title', 'description', 'first_observed_at'
+                                            }
+            finding_fields              =   {
+                                                'security_id', 'finding_id', 'service', 'title', 'description',
+                                                'severity', 'status', 'resource_type', 'resource_id', 'created_at',
+                                                'updated_at', 'recommendation', 'compliance_status', 'region',
+                                                'workflow_state', 'record_state', 'product_name', 'company_name',
+                                                'product_arn', 'generator_id', 'generator'
+                                            }
+            security_map                =   {}  # Load Security Hub summaries first (parent), Map service to security_id Map service to security_id
 
             # Load Security Hub summaries first (parent)
             if 'security_hub' in data:
@@ -778,18 +888,20 @@ class CoreManager:
                     severity_counts = security_service.get('severity_counts', {})
                     
                     # Build security summary record directly
+                    if self.curr_acct is None:
+                        continue
                     filtered_security = {
-                        'account_id': self.curr_acct['id'],
-                        'service': security_service.get('service'),
-                        'total_findings': security_service.get('total_findings', 0),
-                        'critical_count': severity_counts.get('CRITICAL', 0),
-                        'high_count': severity_counts.get('HIGH', 0),
-                        'medium_count': severity_counts.get('MEDIUM', 0),
-                        'low_count': severity_counts.get('LOW', 0),
-                        'informational_count': severity_counts.get('INFORMATIONAL', 0),
-                        'open_findings': security_service.get('open_findings', 0),
-                        'resolved_findings': security_service.get('resolved_findings', 0)
-                    }
+                                            'account_id'            : self.curr_acct['id'],
+                                            'service'               : security_service.get('service'),
+                                            'total_findings'        : security_service.get('total_findings', 0),
+                                            'critical_count'        : severity_counts.get('CRITICAL', 0),
+                                            'high_count'            : severity_counts.get('HIGH', 0),
+                                            'medium_count'          : severity_counts.get('MEDIUM', 0),
+                                            'low_count'             : severity_counts.get('LOW', 0),
+                                            'informational_count'   : severity_counts.get('INFORMATIONAL', 0),
+                                            'open_findings'         : security_service.get('open_findings', 0),
+                                            'resolved_findings'     : security_service.get('resolved_findings', 0)
+                                        }
                     
                     # Upsert security summary
                     result = self.db.upsert('security', filtered_security, ['account_id', 'service'], self.stats)
@@ -811,23 +923,23 @@ class CoreManager:
                         security_id = security_map[service_name]
                         
                         for finding in security_service['findings']:
-                            filtered_finding = {k: v for k, v in finding.items() if k in finding_fields}
+                            filtered_finding                = {k: v for k, v in finding.items() if k in finding_fields}
                             filtered_finding['security_id'] = security_id
                             
                             self.db.upsert('findings', filtered_finding, 'finding_id', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Secrity Hub Findings Loaded")
             # Load GuardDuty findings
-            if 'guard_duty' in data:
+            if 'guard_duty' in data and self.curr_acct is not None:
                 for finding in data['guard_duty']:
                     filtered_finding = {k: v for k, v in finding.items() if k in guard_duty_fields}
-                    filtered_finding['account_id'] = self.curr_acct['id']
-                    filtered_finding['detector_id'] = finding.get('id')  # Map 'id' to 'detector_id'
-                    filtered_finding['finding_type'] = finding.get('type')  # Map 'type' to 'finding_type'
+                    filtered_finding['account_id']      = self.curr_acct['id']
+                    filtered_finding['detector_id']     = finding.get('id')  # Map 'id' to 'detector_id'
+                    filtered_finding['finding_type']    = finding.get('type')  # Map 'type' to 'finding_type'
                     
                     self.db.upsert('guard_duty_findings', filtered_finding, ['account_id', 'detector_id'], self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Guard Duty Loaded")
             # Load KMS keys
-            if 'kms' in data:
+            if 'kms' in data and self.curr_acct is not None:
                 for key in data['kms']:
                     filtered_key = {k: v for k, v in key.items() if k in kms_fields}
                     filtered_key['account_id'] = self.curr_acct['id']
@@ -835,17 +947,17 @@ class CoreManager:
                     self.db.upsert('kms_keys', filtered_key, 'key_id', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="KMS Loaded")
             # Load WAF rules
-            if 'waf' in data:
+            if 'waf' in data and self.curr_acct is not None:
                 for waf in data['waf']:
                     filtered_waf = {k: v for k, v in waf.items() if k in waf_fields}
-                    filtered_waf['account_id'] = self.curr_acct['id']
-                    filtered_waf['waf_id'] = waf.get('id')  # Map 'id' to 'waf_id'
+                    filtered_waf['account_id']  = self.curr_acct['id']
+                    filtered_waf['waf_id']      = waf.get('id')  # Map 'id' to 'waf_id'
                     
                     self.db.upsert('waf_rules', filtered_waf, 'waf_id', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="WAF Loaded")
 
             # Load WAF rules detailed
-            if 'waf_rules' in data:
+            if 'waf_rules' in data and self.curr_acct is not None:
                 for rule in data['waf_rules']:
                     filtered_rule = {k: v for k, v in rule.items() if k in waf_rules_detailed_fields}
                     filtered_rule['account_id'] = self.curr_acct['id']
@@ -858,7 +970,7 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="WAF Rules Detailed Loaded")
 
             # Load CloudTrail logs
-            if 'cloudtrail' in data:
+            if 'cloudtrail' in data and self.curr_acct is not None:
                 for trail in data['cloudtrail']:
                     filtered_trail = {k: v for k, v in trail.items() if k in cloudtrail_fields}
                     filtered_trail['account_id'] = self.curr_acct['id']
@@ -867,7 +979,7 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Cloud Trail Loaded")
 
             # Load Secrets Manager secrets
-            if 'secrets_manager' in data:
+            if 'secrets_manager' in data and self.curr_acct is not None:
                 for secret in data['secrets_manager']:
                     filtered_secret = {k: v for k, v in secret.items() if k in secrets_fields}
                     filtered_secret['account_id'] = self.curr_acct['id']
@@ -876,7 +988,7 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Secrets Manager Loaded")
 
             # Load Certificate Manager certificates
-            if 'certificate_manager' in data:
+            if 'certificate_manager' in data and self.curr_acct is not None:
                 for cert in data['certificate_manager']:
                     filtered_cert = {k: v for k, v in cert.items() if k in cert_fields}
                     filtered_cert['account_id'] = self.curr_acct['id']
@@ -884,7 +996,7 @@ class CoreManager:
                     self.db.upsert('certificates', filtered_cert, 'arn', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Certificate Manager Loaded")
             # Load Inspector findings
-            if 'inspector' in data:
+            if 'inspector' in data and self.curr_acct is not None:
                 for finding in data['inspector']:
                     filtered_finding = {k: v for k, v in finding.items() if k in inspector_fields}
                     filtered_finding['account_id'] = self.curr_acct['id']
@@ -904,28 +1016,26 @@ class CoreManager:
             instance_map = {}
             
             # Define schema fields
-            instance_fields = {
-                'account_id', 'instance_id', 'instance_type', 'platform', 
-                'ip_address', 'computer_name', 'ping_status', 
-                'last_ping_date_time', 'agent_version'
-            }
-            
-            app_fields = {
-                'instance_id', 'account_id', 'name', 'version', 'publisher', 'install_time'
-            }
-            
-            patch_fields = {
-                'instance_id', 'account_id', 'title', 'classification', 'severity', 
-                'state', 'installed_time'
-            }
+            instance_fields =   {
+                                    'account_id', 'instance_id', 'instance_type', 'platform', 
+                                    'ip_address', 'computer_name', 'ping_status', 
+                                    'last_ping_date_time', 'agent_version'
+                                }
+            app_fields      =   {
+                                    'instance_id', 'account_id', 'name', 'version', 'publisher', 'install_time'
+                                }
+            patch_fields    =   {
+                                    'instance_id', 'account_id', 'title', 'classification', 'severity', 
+                                    'state', 'installed_time'
+                                }
             
             # Load instances first
-            if 'instances' in data:
-                for instance in data['instances']:
-                    filtered_instance = {k: v for k, v in instance.items() if k in instance_fields}
+            if 'instances' in data and self.curr_acct is not None:
+                for instance in data['instances'] :
+                    filtered_instance               = {k: v for k, v in instance.items() if k in instance_fields}
                     filtered_instance['account_id'] = self.curr_acct['id']
                     
-                    result = self.db.upsert('inventory_instances', filtered_instance, 'instance_id', self.stats)
+                    result = self.db.upsert('inventory_instances', filtered_instance, ['instance_id','state','classification'], self.stats)
                     
                     if result in ['created', 'updated']:
                         db_instance = self.db.select_one(
@@ -937,23 +1047,23 @@ class CoreManager:
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.INVENTORY, msg="Inventory Instances Loaded")
 
             # Load applications
-            if 'applications' in data and instance_map:
+            if 'applications' in data and instance_map and self.curr_acct is not None:
                 first_instance_db_id = next(iter(instance_map.values()))
                 
                 for app in data['applications']:
-                    filtered_app = {k: v for k, v in app.items() if k in app_fields}
+                    filtered_app                = {k: v for k, v in app.items() if k in app_fields}
                     filtered_app['instance_id'] = first_instance_db_id
-                    filtered_app['account_id'] = self.curr_acct['id']  # Add account_id
+                    filtered_app['account_id']  = self.curr_acct['id']  # Add account_id
                     
                     self.db.upsert('inventory_applications', filtered_app, ['instance_id', 'name'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.INVENTORY, msg="Inventory Applications Loaded")
 
             # Load patches
-            if 'patches' in data and instance_map:
+            if 'patches' in data and instance_map and self.curr_acct is not None:
                 first_instance_db_id = next(iter(instance_map.values()))
                 
                 for patch in data['patches']:
-                    filtered_patch = {k: v for k, v in patch.items() if k in patch_fields}
+                    filtered_patch                  = {k: v for k, v in patch.items() if k in patch_fields}
                     filtered_patch['instance_id']   = first_instance_db_id
                     filtered_patch['account_id']    = self.curr_acct['id']  # Add account_id
                     
@@ -974,10 +1084,10 @@ class CoreManager:
                 'currency', 'period_start', 'period_end', 'status'
             }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for item in data:
                     # Filter to only schema fields
-                    filtered_item = {k: v for k, v in item.items() if k in marketplace_fields}
+                    filtered_item               = {k: v for k, v in item.items() if k in marketplace_fields}
                     filtered_item['account_id'] = self.curr_acct['id']
                     
                     # Upsert using composite unique key (account_id + product_code + period_start)
@@ -998,13 +1108,13 @@ class CoreManager:
         """Load trusted advisor checks with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            advisor_fields = {
-                'account_id', 'check_name', 'category', 'severity', 
-                'recommendation', 'affected_resources_count', 
-                'potential_savings', 'timestamp'
-            }
+            advisor_fields  =   {
+                                    'account_id', 'check_name', 'category', 'severity', 
+                                    'recommendation', 'affected_resources_count', 
+                                    'potential_savings', 'timestamp'
+                                }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for check in data:
                     # Filter to only schema fields
                     filtered_check = {k: v for k, v in check.items() if k in advisor_fields}
@@ -1012,11 +1122,11 @@ class CoreManager:
                     
                     # Upsert using composite unique key (account_id + check_name)
                     self.db.upsert(
-                        'trusted_advisor_checks', 
-                        filtered_check, 
-                        ['account_id', 'check_name'], 
-                        self.stats
-                    )
+                                    'trusted_advisor_checks', 
+                                    filtered_check, 
+                                    ['account_id', 'check_name'], 
+                                    self.stats
+                                )
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.TRUSTED_ADVISOR)
 
@@ -1029,24 +1139,24 @@ class CoreManager:
         """Load health events with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            health_fields = {
-                'account_id', 'arn', 'service', 'event_type_code', 
-                'region', 'start_time', 'end_time', 'status_code'
-            }
+            health_fields   =   {
+                                    'account_id', 'arn', 'service', 'event_type_code', 
+                                    'region', 'start_time', 'end_time', 'status_code'
+                                }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for event in data:
                     # Filter to only schema fields
-                    filtered_event = {k: v for k, v in event.items() if k in health_fields}
-                    filtered_event['account_id'] = self.curr_acct['id']
+                    filtered_event                  = {k: v for k, v in event.items() if k in health_fields}
+                    filtered_event['account_id']    = self.curr_acct['id']
                     
                     # Upsert using unique key (arn is unique for health events)
                     self.db.upsert(
-                        'health_events', 
-                        filtered_event, 
-                        'arn', 
-                        self.stats
-                    )
+                                    'health_events', 
+                                    filtered_event, 
+                                    'arn', 
+                                    self.stats
+                                )
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.HEALTH)
 
             return True
@@ -1058,15 +1168,15 @@ class CoreManager:
         """Load application signals with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            app_fields = {
-                'account_id', 'service_name', 'namespace', 'key_attributes'
-            }
+            app_fields  =   {
+                                'account_id', 'service_name', 'namespace', 'key_attributes'
+                            }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for signal in data:
                     # Filter to only schema fields
-                    filtered_signal = {k: v for k, v in signal.items() if k in app_fields}
-                    filtered_signal['account_id'] = self.curr_acct['id']
+                    filtered_signal                 = {k: v for k, v in signal.items() if k in app_fields}
+                    filtered_signal['account_id']   = self.curr_acct['id']
                     
                     # Convert key_attributes to JSON for JSONB storage
                     if 'key_attributes' in filtered_signal:
@@ -1074,11 +1184,11 @@ class CoreManager:
                     
                     # Upsert using composite unique key (account_id + service_name)
                     self.db.upsert(
-                        'application_signals', 
-                        filtered_signal, 
-                        ['account_id', 'service_name'], 
-                        self.stats
-                    )
+                                    'application_signals', 
+                                    filtered_signal, 
+                                    ['account_id', 'service_name'], 
+                                    self.stats
+                                )
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.APPLICATION)
             return True
         except Exception as e:
@@ -1089,17 +1199,17 @@ class CoreManager:
         """Load resilience hub apps with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            resilience_fields = {
-                'account_id', 'app_arn', 'name', 'description', 'creation_time',
-                'last_assessment_time', 'compliance_status', 'resiliency_score', 
-                'status', 'rpo', 'rto', 'last_drill', 'cost'
-            }
+            resilience_fields   =   {
+                                        'account_id', 'app_arn', 'name', 'description', 'creation_time',
+                                        'last_assessment_time', 'compliance_status', 'resiliency_score', 
+                                        'status', 'rpo', 'rto', 'last_drill', 'cost'
+                                    }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for app in data:
                     # Filter to only schema fields
-                    filtered_app = {k: v for k, v in app.items() if k in resilience_fields}
-                    filtered_app['account_id'] = self.curr_acct['id']
+                    filtered_app                = {k: v for k, v in app.items() if k in resilience_fields}
+                    filtered_app['account_id']  = self.curr_acct['id']
                     
                     # Upsert using unique key (app_arn is unique for resilience hub apps)
                     self.db.upsert('resilience_hub_apps', filtered_app, 'app_arn', self.stats)
@@ -1114,17 +1224,17 @@ class CoreManager:
         """Load service resources with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            resource_fields = {
-                'account_id', 'service_name', 'resource_type', 'resource_id', 'resource_name',
-                'region', 'availability_zone', 'state', 'instance_type', 'vpc_id', 'engine',
-                'instance_class', 'multi_az', 'size_gb', 'volume_type', 'creation_date',
-                'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
-            }
+            resource_fields =   {
+                                    'account_id', 'service_name', 'resource_type', 'resource_id', 'resource_name',
+                                    'region', 'availability_zone', 'state', 'instance_type', 'vpc_id', 'engine',
+                                    'instance_class', 'multi_az', 'size_gb', 'volume_type', 'creation_date',
+                                    'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
+                                }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for resource in data:
                     # Filter to only schema fields
-                    filtered_resource = {k: v for k, v in resource.items() if k in resource_fields}
+                    filtered_resource               = {k: v for k, v in resource.items() if k in resource_fields}
                     filtered_resource['account_id'] = self.curr_acct['id']
                     
                     # Upsert using composite unique key (account_id + resource_id)
@@ -1140,19 +1250,19 @@ class CoreManager:
         """Load compute optimizer recommendations with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            optimizer_fields = {
-                'account_id', 'resource_type', 'resource_arn', 'resource_name', 'finding',
-                'current_instance_type', 'current_memory_size', 'current_volume_type', 'current_volume_size',
-                'recommended_instance_type', 'recommended_memory_size', 'recommended_volume_type', 'recommended_volume_size',
-                'savings_opportunity_percentage', 'estimated_monthly_savings_usd', 'performance_risk',
-                'cpu_utilization_max', 'memory_utilization_avg', 'migration_effort'
-            }
+            optimizer_fields    =   {
+                                        'account_id', 'resource_type', 'resource_arn', 'resource_name', 'finding',
+                                        'current_instance_type', 'current_memory_size', 'current_volume_type', 'current_volume_size',
+                                        'recommended_instance_type', 'recommended_memory_size', 'recommended_volume_type', 'recommended_volume_size',
+                                        'savings_opportunity_percentage', 'estimated_monthly_savings_usd', 'performance_risk',
+                                        'cpu_utilization_max', 'memory_utilization_avg', 'migration_effort'
+                                    }
             
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for recommendation in data:
                     # Filter to only schema fields
-                    filtered_rec = {k: v for k, v in recommendation.items() if k in optimizer_fields}
-                    filtered_rec['account_id'] = self.curr_acct['id']
+                    filtered_rec                = {k: v for k, v in recommendation.items() if k in optimizer_fields}
+                    filtered_rec['account_id']  = self.curr_acct['id']
                     
                     # Upsert using unique key (resource_arn is unique for compute optimizer recommendations)
                     self.db.upsert('compute_optimizer', filtered_rec, 'resource_arn', self.stats)
@@ -1167,18 +1277,18 @@ class CoreManager:
         """Load config inventory data with blazing fast upsert"""
         try:
             # Define schema fields to filter JSON data
-            inventory_fields = {
-                'account_id', 'resource_type', 'resource_subtype', 'resource_id', 'resource_name', 'region',
-                'availability_zone', 'state', 'instance_type', 'vpc_id', 'engine',
-                'instance_class', 'multi_az', 'size_gb', 'volume_type', 'creation_date',
-                'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
-            }
+            inventory_fields    =   {
+                                        'account_id', 'resource_type', 'resource_subtype', 'resource_id', 'resource_name', 'region',
+                                        'availability_zone', 'state', 'instance_type', 'vpc_id', 'engine',
+                                        'instance_class', 'multi_az', 'size_gb', 'volume_type', 'creation_date',
+                                        'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
+                                    }
 
-            if isinstance(data, list):
+            if isinstance(data, list) and self.curr_acct is not None:
                 for inventory in data:
                     # Filter to only schema fields
-                    filtered_inventory = {k: v for k, v in inventory.items() if k in inventory_fields}
-                    filtered_inventory['account_id'] = self.curr_acct['id']
+                    filtered_inventory                  = {k: v for k, v in inventory.items() if k in inventory_fields}
+                    filtered_inventory['account_id']    = self.curr_acct['id']
 
                     # Upsert using composite unique key (account_id + resource_id)
                     self.db.upsert('config_inventory', filtered_inventory, ['account_id', 'resource_id'], self.stats)
@@ -1188,8 +1298,41 @@ class CoreManager:
         except Exception as e:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.CONFIG_INVENTORY, msg=e)
             return False
+    #Method: UPSERT
+    def load_support_tickets_data(self, data: Dict) -> bool:
+        """Load support tickets data with blazing fast upsert"""
+        try:
+            if not isinstance(data, dict) or not self.curr_acct:
+                return False
+                
+            # Extract tickets array from the data structure
+            tickets = data.get('support_tickets', [])
+            
+            # Define schema fields to filter JSON data
+            ticket_fields = {
+                'account_id', 'case_id', 'display_id', 'subject', 'status',
+                'severity_code', 'service_code', 'category_code', 'time_created',
+                'submitted_by', 'language', 'date_from', 'date_to'
+            }
+            
+            if isinstance(tickets, list):
+                for ticket in tickets:
+                    # Filter to only schema fields
+                    filtered_ticket = {k: v for k, v in ticket.items() if k in ticket_fields}
+                    filtered_ticket['account_id'] = self.curr_acct['id']
+                    
+                    # Add date_from and date_to from parent data
+                    filtered_ticket['date_from'] = data.get('date_from')
+                    filtered_ticket['date_to'] = data.get('date_to')
+                    
+                    # Upsert using unique key (case_id is unique)
+                    self.db.upsert('support_tickets', filtered_ticket, 'case_id', self.stats)
 
-
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SUPPORT_TICKETS)
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.SUPPORT_TICKETS, msg=e)
+            return False
     #Method: UPSERT
     def load_logs_data(self, data: Dict) -> bool:
         try:
@@ -1203,17 +1346,16 @@ class CoreManager:
                 messages = [messages] if messages else []
             
             # Filter out invalid columns
-            valid_log_fields = {
-                'account_id', 'date_created', 'account_status', 'cost_status', 
-                'service_status', 'security_status', 'config_status', 
-                'inventory_status', 'marketplace_status', 'trusted_advisor_status',
-                'health_status', 'application_status', 'resilience_hub_status',
-                
-            }
+            valid_log_fields    =   {
+                                        'account_id', 'date_created', 'account_status', 'cost_status', 
+                                        'service_status', 'security_status', 'config_status', 
+                                        'inventory_status', 'marketplace_status', 'trusted_advisor_status',
+                                        'health_status', 'application_status', 'resilience_hub_status',                        
+                                    }
             #'compute_optimizer_status', 'service_resources_status'
             
             # Filter data to only include valid fields
-            filtered_data = {k: v for k, v in data.items() if k in valid_log_fields}
+            filtered_data               = {k: v for k, v in data.items() if k in valid_log_fields}
             filtered_data['account_id'] = self.curr_acct['id']
             
             # Ensure date_created exists
@@ -1234,19 +1376,19 @@ class CoreManager:
                         if isinstance(message_item, dict):
                             # Handle dict format: {'type': 'message'}
                             for message_type, message_text in message_item.items():
-                                message_data = {
-                                    'log_id': db_log['id'],
-                                    'message': str(message_text),
-                                    'message_type': message_type
-                                }
+                                message_data    =   {
+                                                        'log_id': db_log['id'],
+                                                        'message': str(message_text),
+                                                        'message_type': message_type
+                                                    }
                                 self.db.upsert('log_messages', message_data, ['log_id', 'message_type'], self.stats)
                         else:
                             # Handle string format
-                            message_data = {
-                                'log_id': db_log['id'],
-                                'message': str(message_item),
-                                'message_type': 'INFO'
-                            }
+                            message_data    =   {
+                                                    'log_id': db_log['id'],
+                                                    'message': str(message_item),
+                                                    'message_type': 'INFO'
+                                                }
                             self.db.upsert('log_messages', message_data, ['log_id', 'message_type'], self.stats)
                 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.LOGS)
@@ -1256,15 +1398,14 @@ class CoreManager:
             print(f"{ERROR} Logs load error: {e}")
             return False
 
-
-    def process_file_data(self, data: Dict, file_name: str) -> None:
+    def process_file_data(self, data: Dict, file_name: str) -> Dict:
         """Process and load all data from file with parallel loading"""
         self.stats['TOTAL'] += 1
         
         if not self.validate_data_structure(data):
             print(f"{FAIL} Invalid data structure in {file_name}")
             self.stats['SKIPPED'] += 1
-            return
+            return self.stats
 
         # Phase 1: Load account first (required for self.curr_acct)
         if data.get('account'):
@@ -1285,6 +1426,7 @@ class CoreManager:
             'service_resources' : self.load_service_resources_data,
             'compute_optimizer' : self.load_compute_optimizer_data,
             'config_inventory'  : self.load_config_inventory_data,
+            'support_tickets'   : self.load_support_tickets_data,
             'logs'              : self.load_logs_data
         }
         
@@ -1325,17 +1467,16 @@ def process_data_status(status):
 
     return [total, loaded, not_loaded]
 
-""" 6. Loads the data """
 def load_data():
     load_time_start = time.time()
     
-    core_s3 = S3Manager(BUCKET)
+    core_s3 = S3Manager(BUCKET or '')
     file_arr= core_s3.list_files(prefix="data/")
     
     core_db = CoreManager()
     #0. checking files to be loaded
     
-    result = []
+    result = {}
     try:
         if(len(file_arr) > 0):
             print(f"{INFO} Starting to Load {len(file_arr)} dataset(s)")
@@ -1344,21 +1485,22 @@ def load_data():
                 name, path = file["file_name"], file["file_path"]
                 try:
                     step_start = time.time()
-                    
+                    print(f"{INFO} Processing {path}", end='', flush=True)
                     data    = core_s3.read_file(file_path=path)
                     if isinstance(data, str):
                         data = json.loads(data)
                     try:
-                        result  = core_db.process_file_data(data=data, file_name=name)
+                        result      = core_db.process_file_data(data=data, file_name=name)
                         core_s3.delete_files(file_path=path)
                         step_finish = round(time.time() - step_start, 2)
-                        print(f"{SUCCESS} {core_db.curr_acct['account_id']}/{name} Data Loaded & File moved to loaded/ folder in {step_finish}s")
+                        account_id  = core_db.curr_acct['account_id'] if core_db.curr_acct else 'Unknown'
+                        print(f"\r{SUCCESS} {account_id}/{REGION}/{name} Data Loaded & File moved to loaded/ folder in {step_finish}s")
                         
                     except Exception as e:
-                        print(f"{FAIL} Error loading file {name}: {str(e)}")        
+                        print(f"\r{FAIL} Error loading file {name}: {str(e)}")        
                         continue
                 except Exception as e:
-                    print(f"{FAIL} Error reading file {name}: {str(e)}")
+                    print(f"\r{FAIL} Error reading file {name}: {str(e)}")
                     continue
             load_time_finish            = round(time.time() - load_time_start, 2)
             result['load_time_finish']  = load_time_finish
@@ -1371,31 +1513,55 @@ def load_data():
         return result
 
 """ 7. Testing Function, Used to test the script without fetching data from S3 instead uses the sample.json  """
-def testing():
-    core_db = CoreManager()
-    try:
-        with open('data/2025-10-08_DAILY.json', 'r', encoding='utf-8') as f:
-            file_content = f.read()
-        print(f"*File Read")    
-        data = json.loads(file_content)
-        print(f"*Ready to load sample dataset")
-        result = core_db.process_file_data(data=data, file_name="data/2025-07-17_MONTHLY.json")
 
+def testing():
+    load_time_start = time.time()
+    core_db         = CoreManager()
+    data_file = "examples/data.json"
+
+    try:
+        step_start = time.time()
+
+        with open(data_file, 'r', encoding='utf-8') as f:
+            file_content = f.read()
         
+        data = json.loads(file_content)
+        if isinstance(data, str):
+            data = json.loads(data)
+
+        result = core_db.process_file_data(data=data, file_name=data_file)
+
+        step_finish = round(time.time() - step_start, 2)
+        print(f"{SUCCESS} Data Loaded & File moved to loaded/ folder in {step_finish}s")
+        
+        load_time_finish            = round(time.time() - load_time_start, 2)
+        result['load_time_finish']  = load_time_finish
+        return result
+    
     except FileNotFoundError:
-        print(f"{FAIL} sample.json not found")
+        print(f"{FAIL} {data_file} not found")
+        return {}
     except json.JSONDecodeError as e:
         print(f"{FAIL} JSON decode error: {e}")
+        return {}
     except Exception as e:
-        print(f"{FAIL} Error processing sample.json: {e}")
+        print(f"{FAIL} Error processing {data_file}: {e}")
+        return {}
 
 """ 8. MAIN LAMBDA METHOD : This method getsd invoked from the Lambda function """
 def lambda_handler(event=None, context=None):
     aws_permission  = AWSBoto3Permissions()
-
+    if context is not None and context == "test":
+        print("*"*15, "TESTING", "*"*15)
+        print("\n")
+    temp = True
     if aws_permission.test():
         print("*"*15,"Connected","*"*15)
-        data    = load_data()
+        
+        if context is not None and context == "test":
+            data    = testing()
+        else:
+            data    = load_data()
 
         if not data:
             print(f"{INFO} No files to load")
@@ -1409,15 +1575,20 @@ def lambda_handler(event=None, context=None):
         print(status[0])
         print(status[1])
         print(status[2])
-        print(f"{TIMING}  Time Taken: {data['load_time_finish']}")
+        if 'load_time_finish' in data:
+            print(f"{TIMING}  Time Taken: {data['load_time_finish']} seconds")
         print("*"*15,"Disconnected","*"*15)
         return True
     else:
         print("*"*15, "Not Connected", "*"*15)
         return False
     
-""" 9. This is only for development testing, Runs on your local machine """
+""" 9. You can either use this for Local testing. This is the commadn that woudl also run on the EC2 configuration of the application"""
 if __name__ == "__main__":
-    testing()
-    #temp = lambda_handler()
+    
+    """ Use the below to use test data """
+    #emp = lambda_handler(context="test")
+
+    """ Use the below to use for production """
+    temp = lambda_handler()
     

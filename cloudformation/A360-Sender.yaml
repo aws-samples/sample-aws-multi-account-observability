@@ -1,12 +1,50 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: A360 - Sender Account with Lambda function that hthat extracts relevant data from this account and sends it to the Analytics account for metric aggregation. Eventbridge configured to run every day at 0200
+Description: Multi Account Observability - Sender Account with Lambda function that hthat extracts relevant data from this account and sends it to the Analytics account for metric aggregation. Eventbridge configured to run every day at 0200
+Metadata:
+  cfn_nag:
+    rules_to_suppress:
+      - id: W11
+        reason: "AWS APIs don't support resource-level permissions"
+      - id: W13
+        reason: "Required for multi-service data collection"
+      - id: W89
+        reason: "Lambda doesn't require VPC for S3/API access"
+        
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Section 1: Analytics Account Configuration"
+        Parameters:
+          - AnalyticsAccount
+          - S3Bucket
+          - AnalyticsKMSKey
+      - Label:
+          default: "Section 2: Your Account Information"
+        Parameters:
+          - Environment
+          - Category
+          - CustomerName
+          - PartnerName
+          - ProductName
+    ParameterLabels:
+      AnalyticsAccount:
+        default: "1.1 Analytics Account ID (from Analytics stack outputs)"
+      S3Bucket:
+        default: "1.2 S3 Bucket Name (from Analytics stack outputs)"
+      AnalyticsKMSKey:
+        default: "1.3 Analytics KMS Key ARN (from Analytics stack outputs)"
+      Environment:
+        default: "2.1 Environment Type"
+      Category:
+        default: "2.2 Category"
+      CustomerName:
+        default: "2.3 Customer/Business Name"
+      PartnerName:
+        default: "2.4 Partner/Department Name"
+      ProductName:
+        default: "2.5 Product/Workload Name"
 
 Parameters:
-  Region:
-    Type: String
-    Default: ap-southeast-1
-    Description: AWS Region for the Lambda function
-    
   AnalyticsAccount:
     Type: String
     Default: 'ANALYTICS_ACCOUNT_ID'
@@ -14,23 +52,28 @@ Parameters:
     
   S3Bucket:
     Type: String
-    Default: 'A360-data-bucket'
+    Default: 'ANALYTICS_ACCOUNT_VIEW360_BUCKET'
     Description: S3 bucket for storing data
     
   AnalyticsKMSKey:
     Type: String
-    Default: 'arn:aws:kms:ap-southeast-1:ANALYTICS_ACCOUNT_ID:key/KEY_ID'
+    Default: 'ANALYTICS_ACCOUNT_VIEW360_KMS_KEY_ARN'
     Description: Analytics account KMS key ARN for S3 encryption
 
   CustomerName:
     Type: String
     Default: "None"
-    Description: Customer name for the account
+    Description: Customer name for external accounts or Business Unit name for internal accounts
     
   PartnerName:
     Type: String
     Default: "None"
-    Description: Partner name for the account
+    Description: Specify the managing partner name for externally managed accounts or the department name for internal business unit accounts
+
+  ProductName:
+    Type: String
+    Default: "None"
+    Description: Name of the Product/Workload/Application that is currently running in this account. If there are multiple of them split them by comma's (,). e.g Product A, Product B
   
   Environment:
     Type: String
@@ -49,6 +92,7 @@ Parameters:
     Default: "None"
     AllowedValues:
       - "None"
+      - "Both"
       - "Internet"
       - "Intranet"
     Description: Classify whether the account is facing the Internet, Intranet or Both
@@ -62,6 +106,15 @@ Resources:
 
   A360SenderPolicy:
     Type: 'AWS::IAM::ManagedPolicy'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Multi-service data collection requires wildcard for AWS APIs"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "Multi-service data collection requires wildcard for AWS APIs"
     Properties:
       # Removed ManagedPolicyName to allow CloudFormation to generate a name
       Description: Policy for A360 Sender Lambda function
@@ -123,6 +176,9 @@ Resources:
               - config:DescribeConfigRules
               - config:GetComplianceDetailsByConfigRule
               - config:DescribeComplianceByConfigRule
+              - config:DescribeConformancePacks
+              - config:DescribeConformancePackStatus
+              - config:GetConformancePackComplianceDetails
             Resource: "*"
           - Sid: SecurityHubAccess
             Effect: Allow
@@ -154,7 +210,7 @@ Resources:
               - kms:ListKeys
               - kms:DescribeKey
               - kms:GetKeyRotationStatus
-            Resource: !Sub "arn:aws:kms:${Region}:${AWS::AccountId}:key/*"
+            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
           - Sid: KMSDecryptAccess
             Effect: Allow
             Action:
@@ -182,7 +238,7 @@ Resources:
             Condition:
               StringEquals:
                 aws:RequestedRegion: 
-                  - !Ref Region
+                  - !Ref AWS::Region
                   - "us-east-1"
           - Sid: CloudTrailAccess
             Effect: Allow
@@ -220,6 +276,7 @@ Resources:
             Action:
               - support:DescribeTrustedAdvisorChecks
               - support:DescribeTrustedAdvisorCheckResult
+              - support:DescribeCases
             Resource: "*"
           - Sid: ApplicationSignalsAccess
             Effect: Allow
@@ -302,7 +359,7 @@ Resources:
               - logs:CreateLogStream
               - logs:PutLogEvents
             Resource: 
-              - !Sub "arn:aws:logs:${Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
           - Sid: SQSAccess
             Effect: Allow
             Action:
@@ -352,6 +409,15 @@ Resources:
 
   A360SenderFunction:
     Type: 'AWS::Lambda::Function'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Sender doesn't require VPC for S3/API access"
+      checkov:
+        skip:
+          - id: "CKV_AWS_117"
+            comment: "Sender doesn't require VPC for S3/API access"
     Properties:
       # Removed FunctionName to allow CloudFormation to generate a name
       Handler: index.lambda_handler
@@ -362,13 +428,14 @@ Resources:
       KmsKeyArn: !GetAtt LambdaKMSKey.Arn
       Environment:
         Variables:
-          REGION: !Ref Region
+          REGION: !Ref AWS::Region
           BUCKET: !Ref S3Bucket
           ANALYTICS_KMS_KEY: !Ref AnalyticsKMSKey
           CUSTOMER: !Ref CustomerName
           PARTNER: !Ref PartnerName
           CATEGORY: !Ref Category
           ENVIRONMENT: !Ref Environment
+          PRODUCT: !Ref ProductName
       Code:
         ZipFile: |
           import boto3
@@ -427,6 +494,12 @@ Resources:
       SourceArn: !GetAtt LambdaScheduleRule.Arn
 
 Outputs:
+  Region:
+    Description: Region of this implementation
+    Value: !Ref AWS::Region
+    Export:
+      Name: !Sub "${AWS::StackName}-Region"
+
   LambdaFunctionArn:
     Description: ARN of the Lambda function
     Value: !GetAtt A360SenderFunction.Arn
