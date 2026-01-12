@@ -12,16 +12,27 @@ A comprehensive AWS multi-account analytics platform that aggregates, processes,
 
 ### 1. Data Collection (Sender Accounts)
 <!-- ![Sender Accounts Flow](doc/files/img/view360-sender-flow.png) -->
-<div align="center"><img width="1036" height="234" alt="image" src="https://github.com/user-attachments/assets/60351665-32b0-4e0c-97e0-3ab245019f8a" /></div>
+<div align="center"><img width="888" height="335" alt="image" src="https://github.com/user-attachments/assets/60351665-32b0-4e0c-97e0-3ab245019f8a" /></div>
 
 ### 2. Data Processing (Analytics Account)
 The Analytics account can be set up in 2 different methods that are described below. This can be selected upon running the CloudFormation template.
 
 #### Option A: Serverless (Lambda Only)
-<div align="center"><img width="1042" height="335" alt="image" src="https://github.com/user-attachments/assets/59918bf1-51e9-4872-869f-0820caf954a8" /></div>
+
+##### Data Flow
+
+<div align="center"><img width="888" height="335" alt="image" src="https://github.com/user-attachments/assets/59918bf1-51e9-4872-869f-0820caf954a8" /></div>
+
+##### Architecture
+<div align="center"><img width="888" height="678" alt="View360-A360-LABELED-Option1-Only Lambda" src="https://github.com/user-attachments/assets/e6c06b88-2b35-45c4-8a0e-64654e2855e9" /></div>
 
 #### Option B: Lambda + EC2 + Systems Manager
-<div align="center"><img width="1038" height="330" alt="image" src="https://github.com/user-attachments/assets/579bdd53-d453-4a5a-8a15-59b2b3257e11" /></div>
+
+##### Data Flow
+<div align="center"><img width="888" height="335" alt="image" src="https://github.com/user-attachments/assets/579bdd53-d453-4a5a-8a15-59b2b3257e11" /></div>
+
+##### Architecture
+<div align="center"><img width="888" height="678" alt="View360-A360-LABELED-Option2-With EC2" src="https://github.com/user-attachments/assets/b966218a-429e-47bd-9c0a-22c5bc0bc643" /></div>
 
 ## File Description
 
