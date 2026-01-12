@@ -234,10 +234,12 @@ Resources:
     Metadata:
       cfn_nag:
         rules_to_suppress:
-          - id: W2
-            reason: "RDS requires VPC-wide access for Lambda and EC2"
           - id: W9
             reason: "VPC CIDR required for internal communication"
+      checkov:
+        skip:
+          - id: "CKV_AWS_23"
+            comment: "All security group rules have descriptions including conditional rules"
     Properties:
       GroupDescription: Security group for RDS Aurora PostgreSQL
       VpcId: !Ref VPC
