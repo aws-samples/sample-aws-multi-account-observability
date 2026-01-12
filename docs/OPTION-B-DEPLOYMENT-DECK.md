@@ -32,7 +32,7 @@ Below is the series of steps that you should follow in a sequential format to en
 | 3 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 4 | Then click Next |
 | 5 | There will be a requirement to set parameters, to configure this account. *Note: For this implementation, please make sure to select **YES** for 1.3 Deploy EC2 Receiver (with VPC Endpoints). |
-|   | <div align="center"> ![image](uploads/97c42f0f8f15ed07254c4743adddc69f/image.png){width=512 height=627} </div> |
+|   | <div align="center"> <img width="679" height="835" alt="image" src="https://github.com/user-attachments/assets/30edee53-0868-42e8-a462-b7c519bda754" /></div> |
 | 6 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click Next and proceed to create the CloudFormation template. |
 | 8 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
@@ -152,12 +152,13 @@ Below is the series of steps that you should follow in a sequential format to en
 | 2 | Browse and upload the file `A360-QS-Migration.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 3 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 4 | Then click Next |
-| 5 | There will be a requirement to set parameters<br><br><div align="center"><img src="uploads/3dd96cbd51a8072b287e5ee6a7c9a2ec/image.png" width="378" height="408" alt="image"></div> |
+| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="755" height="816" alt="image" src="https://github.com/user-attachments/assets/edc39200-012d-44ef-9433-7b0501ec2b18" /></div> |
 | 6 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click Next and proceed to create the CloudFormation template. |
 | 8 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
 | 9 | Open the Lambda and search for a function `<stack-name>-qs-migration` |
 | 10 | Open the lambda function and navigate to the Test tab & Click Test to execute the template migration |
+
 ## SEQ 8: Sender Accounts
 **Note**: When you create an Analytics Account, all the sender scripts are loaded in it as well. So don't follow the next steps if you are planning to set up a Sender for the Analytics account
 
@@ -168,7 +169,7 @@ Below is the series of steps that you should follow in a sequential format to en
 | 3 | Browse and upload the file `A360-Sender.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 4 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 5 | Then click Next |
-| 6 | There will be a requirement to set parameters<br><br><div align="center"><img src="uploads/cb50fa33f166b2f9bbd1cb384eb0a2ac/image.png" width="380" height="459" alt="image"></div> |
+| 6 | There will be a requirement to set parameters<br><div align="center"> <img width="759" height="918" alt="image" src="https://github.com/user-attachments/assets/5739f5fb-1e31-44af-95ab-1ea2b4636c4b" /> </div> |
 | 7 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 8 | Click Next and proceed to create the CloudFormation template. |
 | 9 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
@@ -189,6 +190,4 @@ Below is the series of steps that you should follow in a sequential format to en
 | 7 | Click on Share |
 | 8 | Search for your QuickSuite user name and select Share |
 | 9 | Then navigate to the QuickSuite home page and click on Analysis |
-| 10 | You should see the newly created analysis like below |
-
-<div align="center"><img src="uploads/c8b59c32de914d06c6f6c0fd5110a17c/image.png" width="380" height="459" alt="image"></div>
+| 10 | You should see the newly created analysis like below <br> <div align="center"> <img width="720" height="257" alt="Screenshot 2026-01-09 145033" src="https://github.com/user-attachments/assets/13daa90b-72af-46ef-b2a1-684884085173" /> </div>|
