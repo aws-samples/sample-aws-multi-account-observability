@@ -989,7 +989,7 @@ class AWSResourceManager:
                     try:
                         result[key] = future.result() or []
                     except Exception as e:
-                        print(f"Error fetching {key}: {str(e)}")
+                        ##print(f"Error fetching")
                         result[key] = []
             
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)

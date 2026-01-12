@@ -1443,7 +1443,9 @@ class CoreManager:
                 try:
                     future.result()
                 except Exception as e:
-                    print(f"{ERROR} Error loading {attr}: {e}")
+                    print(f"{ERROR}: {e}")
+                    continue
+                    
         
         self.stats['LOADED'] += 1
         return self.stats
