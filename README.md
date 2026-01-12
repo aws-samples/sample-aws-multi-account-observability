@@ -7,21 +7,21 @@
 
 A comprehensive AWS multi-account analytics platform that aggregates, processes, and visualizes cloud infrastructure data across multiple AWS accounts. Built with serverless architecture using AWS Lambda, Aurora PostgreSQL Serverless v2, and Amazon QuickSight.
 
-## Architecture
-<div align="center"><img width="888" height="678" alt="View360-A360-LABELED-Option1-Only Lambda" src="https://github.com/user-attachments/assets/84bbe01e-cc6e-47ac-bac1-75c7cbc2f19c" /></div>
+## Setup
+<!-- <div align="center"><img width="888" height="678" alt="View360-A360-LABELED-Option1-Only Lambda" src="https://github.com/user-attachments/assets/84bbe01e-cc6e-47ac-bac1-75c7cbc2f19c" /></div> -->
 
 ### 1. Data Collection (Sender Accounts)
 <!-- ![Sender Accounts Flow](doc/files/img/view360-sender-flow.png) -->
-<div align="center"><img width="642" height="143" alt="a360-sender-flow drawio" src="https://github.com/user-attachments/assets/0764d28e-1db1-46ee-beb4-28cb05ef4237" /></div>
+<div align="center"><img width="1036" height="234" alt="image" src="https://github.com/user-attachments/assets/60351665-32b0-4e0c-97e0-3ab245019f8a" /></div>
 
 ### 2. Data Processing (Analytics Account)
 The Analytics account can be set up in 2 different methods that are described below. This can be selected upon running the CloudFormation template.
 
 #### Option A: Serverless (Lambda Only)
-<div align="center"><img width="642" height="205" alt="a360-receiver-lambda-flow" src="https://github.com/user-attachments/assets/81dc93ed-6e1c-4eb6-a2f4-d641cfe24fdf" /></div>
+<div align="center"><img width="1042" height="335" alt="image" src="https://github.com/user-attachments/assets/59918bf1-51e9-4872-869f-0820caf954a8" /></div>
 
 #### Option B: Lambda + EC2 + Systems Manager
-<div align="center"><img width="642" height="205" alt="a360-receiver-ec2-flow" src="https://github.com/user-attachments/assets/f62b943c-b9df-4ad8-9071-1d11da7d8d9e" /></div>
+<div align="center"><img width="1038" height="330" alt="image" src="https://github.com/user-attachments/assets/579bdd53-d453-4a5a-8a15-59b2b3257e11" /></div>
 
 ## File Description
 
