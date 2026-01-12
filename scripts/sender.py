@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv() """
-
+load_dotenv()
+ """
 """ IMPORTS """
 import sys
 import boto3
@@ -985,12 +985,12 @@ class AWSResourceManager:
             with ThreadPoolExecutor(max_workers=9) as executor:
                 futures = {executor.submit(func): key for key, func in security_tasks.items()}
                 for future in as_completed(futures):
-                    temp = futures[future]
+                    key = futures[future]
                     try:
-                        result[temp] = future.result() or []
+                        result[key] = future.result() or []
                     except Exception as e:
-                        #print(f"Error {temp}: {str(e)}")
-                        result[temp] = []
+                        print(f"Error fetching {key}: {str(e)}")
+                        result[key] = []
             
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)
             self.set_log(def_type=AWSResourceType.SECURITY, status="Pass")

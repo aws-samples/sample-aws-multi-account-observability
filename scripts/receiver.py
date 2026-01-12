@@ -61,7 +61,10 @@ AWS_TYPECAST_2  =   {
                                                             'created_date',
                                                             'not_after',
                                                             'first_observed_at',
-                                                            'last_changed_date'
+                                                            'last_changed_date',
+                                                            'association_execution_date',
+                                                            'association_success_date'
+
                                                         ],
                         'period_granularity_type'   :   [
                                                             'period_granularity'
@@ -1019,7 +1022,8 @@ class CoreManager:
             instance_fields =   {
                                     'account_id', 'instance_id', 'instance_type', 'platform', 
                                     'ip_address', 'computer_name', 'ping_status', 
-                                    'last_ping_date_time', 'agent_version'
+                                    'last_ping_date_time', 'agent_version', 'platform_version','platform_type',
+                                    'is_latest_version','association_status','association_execution_date','association_success_date'
                                 }
             app_fields      =   {
                                     'instance_id', 'account_id', 'name', 'version', 'publisher', 'install_time'
@@ -1439,8 +1443,7 @@ class CoreManager:
                 try:
                     future.result()
                 except Exception as e:
-                    print("Error: At 14-42")
-                    #continue
+                    print(f"{ERROR} Error loading {attr}: {e}")
         
         self.stats['LOADED'] += 1
         return self.stats
@@ -1588,7 +1591,7 @@ def lambda_handler(event=None, context=None):
 if __name__ == "__main__":
     
     """ Use the below to use test data """
-    #emp = lambda_handler(context="test")
+    #temp = lambda_handler(context="test")
 
     """ Use the below to use for production """
     temp = lambda_handler()

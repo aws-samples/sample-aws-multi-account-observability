@@ -263,13 +263,21 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          CidrIp: 10.0.0.0/16
+          SourceSecurityGroupId: !Ref QuickSightSecurityGroup
           Description: Allow PostgreSQL access from VPC
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
           Description: Allow PostgreSQL access from anywhere (for testing)
+        - !If
+          - DeployEC2Resources
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            SourceSecurityGroupId: !Ref EC2SecurityGroup
+            Description: Allow PostgreSQL from EC2 receiver
+          - !Ref AWS::NoValue
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 443
