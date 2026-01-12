@@ -149,7 +149,7 @@ Below is the series of steps that you should follow in a sequential format to en
 | 2 | Browse and upload the file `A360-QS-Migration.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 3 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 4 | Then click Next |
-| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="949" height="1022" alt="Screenshot 2026-01-09 144647" src="https://github.com/user-attachments/assets/b9d29568-7696-4e7f-97ca-1878f1451b39" /></div> |
+| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="755" height="816" alt="image" src="https://github.com/user-attachments/assets/edc39200-012d-44ef-9433-7b0501ec2b18" /></div> |
 | 6 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click Next and proceed to create the CloudFormation template. |
 | 8 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
@@ -166,7 +166,7 @@ Below is the series of steps that you should follow in a sequential format to en
 | 3 | Browse and upload the file `A360-Sender.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 4 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 5 | Then click Next |
-| 6 | There will be a requirement to set parameters<br><div align="center"> <img width="935" height="1131" alt="Screenshot 2026-01-09 141717" src="https://github.com/user-attachments/assets/aa0f8638-bb2e-49e0-92f8-27ada0816b60" /> </div> |
+| 6 | There will be a requirement to set parameters<br><div align="center"> <img width="759" height="918" alt="image" src="https://github.com/user-attachments/assets/5739f5fb-1e31-44af-95ab-1ea2b4636c4b" /> </div> |
 | 7 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 8 | Click Next and proceed to create the CloudFormation template. |
 | 9 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
