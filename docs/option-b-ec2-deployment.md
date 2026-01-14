@@ -124,6 +124,11 @@ This is a comprehensive deployment guide for View 360 (Multi account observabili
 
 ## Step 7: Migrate Analysis
 
+>⚠️ IMPORTANT
+> Before running this script please make sure your Amazon Quick Suite has access to Secrets Manager
+> Log in to Amazon Quick Suite > Manage Quick Suite > AWS Resources > Check the box which says AWS Secrets Manager > Select your Secret > Click Save
+
+
 | Step | Description |
 |------|-------------|
 | 1 | Open `CloudFormation` in AWS (the account you wish for it to be an Analytics account) the below steps: **Create Stack** > **Choose an existing template** > **Upload the template file** |
