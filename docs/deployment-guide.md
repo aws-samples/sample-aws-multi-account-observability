@@ -57,7 +57,7 @@ Using a Serverless approach with only Lambda functions handling the transactions
 <table>
 <tr>
 <td colspan=4 align=center width=100%>
-<img src="img/A360-Option1-Lambda.png" alt="View360 Analytics Architecture" >
+<img width="962" height="767" alt="A360-Option1-Lambda" src="https://github.com/user-attachments/assets/4caca7b8-07b3-488d-9ab3-ca3f47cd0802" />
 </td>
 </tr>
 <tr>
@@ -138,7 +138,7 @@ Using a Serverless approach with only Lambda functions handling the transactions
 <table>
 <tr>
 <td colspan=4 align=center width=100%>
-<img src="img/A360-Option1-Flow-Lambda.png" alt="View360 Analytics Architecture" width="800px">
+<img width="962" height="335" alt="A360-Option1-Flow-Lambda" src="https://github.com/user-attachments/assets/59401600-c16a-4141-be83-041b9e6c71dc" /> 
 </td>
 </tr>
 <tr>
@@ -202,7 +202,7 @@ Using a EC2 & SSM agent in the Receiver with only Lambda functions handling the 
 <table>
 <tr>
 <td colspan=4 align=center width=100%>
-<img src="img/A360-Option2-EC2.png" alt="View360 Analytics Architecture" width="800px">
+<img width="962" height="767" alt="A360-Option2-EC2" src="https://github.com/user-attachments/assets/9f7b4d17-5aaa-483c-b359-3720cf3b5230" />
 </td>
 </tr>
 
@@ -295,7 +295,7 @@ Using a EC2 & SSM agent in the Receiver with only Lambda functions handling the 
 <table width="100%">
 <tr>
 <td colspan=4 align=center width=100%>
-<img src="img/A360-Option2-Flow-EC2.png" alt="View360 Analytics Architecture" width="800px">
+<img width="962" height="330" alt="A360-Option2-Flow-EC2" src="https://github.com/user-attachments/assets/58109080-795b-4d2e-8bf9-cb50c6de38ab" />
 </td>
 </tr>
 <tr>
