@@ -1,7 +1,7 @@
 # Multi-Account Observability
 
 [![AWS](https://img.shields.io/badge/AWS-Lambda-orange.svg)](https://aws.amazon.com/lambda/)
-[![Python](https://img.shields.io/badge/Python-3.9-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
 [![CloudFormation](https://img.shields.io/badge/CloudFormation-Template-green.svg)](https://aws.amazon.com/cloudformation/)
 [![Boto3](https://img.shields.io/badge/Boto3-1.42.0-yellow.svg)](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
