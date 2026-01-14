@@ -1,7 +1,7 @@
 # Option B - Lambda + EC2 + SSM Deployment Guide
 This is a comprehensive deployment guide for View 360 (Multi account observability) within AWS. Using a EC2 & SSM agent in the Receiver with only Lambda functions handling the transactions
 
-<div align="center"> <img src="img/A360-Option2-EC2.png" alt="View360 Analytics Architecture" width="800px"> </div>
+<div align="center"> <img width="962" height="767" alt="A360-Option2-EC2" src="https://github.com/user-attachments/assets/9f7b4d17-5aaa-483c-b359-3720cf3b5230" /> </div>
 
 
 ## Step 1: Setup Analytics Account
@@ -13,12 +13,15 @@ This is a comprehensive deployment guide for View 360 (Multi account observabili
 | 3 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 4 | Then click Next |
 | 5 | There will be a requirement to set parameters, to configure this account. *Note: For this implementation, please make sure to select **YES** for 1.3 Deploy EC2 Receiver (with VPC Endpoints). |
-|   | <div align="center"> <img src="img/seq-1-option-b.png" alt="View360 Analytics Architecture" width="700px"> </div> |
+|   | <div align="center"> <img width="679" height="835" alt="seq-1-option-b" src="https://github.com/user-attachments/assets/c0737c7b-b04c-4e7e-acfe-68617286c6fd" /> </div> |
 | 6 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click Next and proceed to create the CloudFormation template. |
 | 8 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
 | 9 | The information within the Outputs Tab is the key to all the subsequent steps |
 | 10 | Analytics Account is now created |
+
+
+
 
 ## Step 2: Setup Folders within the S3
 
@@ -128,14 +131,13 @@ This is a comprehensive deployment guide for View 360 (Multi account observabili
 > Before running this script please make sure your Amazon Quick Suite has access to Secrets Manager
 > Log in to Amazon Quick Suite > Manage Quick Suite > AWS Resources > Check the box which says AWS Secrets Manager > Select your Secret > Click Save
 
-
 | Step | Description |
 |------|-------------|
 | 1 | Open `CloudFormation` in AWS (the account you wish for it to be an Analytics account) the below steps: **Create Stack** > **Choose an existing template** > **Upload the template file** |
 | 2 | Browse and upload the file `A360-QS-Migration.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 3 | Once the S3 URL is generated, click on `View in Infrastructure Composer` and `Validate` the template. This is recommended practice. |
 | 4 | Then click `Next` |
-| 5 | There will be a requirement to set parameters<br><br><div align="center"><img src="img/seq-7-migration.png" width="700px" alt="Migration Cloud Formation"></div> |
+| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="755" height="816" alt="seq-7-migration" src="https://github.com/user-attachments/assets/4f09be82-08be-46a1-91f7-15e1e124e282" /></div> |
 | 6 | Click `Next` and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click `Next` and proceed to create the CloudFormation template. |
 | 8 | Upon `CREATION_COMPLETE` navigate to the Outputs Tab and note the information inside. |
@@ -152,7 +154,7 @@ This is a comprehensive deployment guide for View 360 (Multi account observabili
 | 2 | Browse and upload the file `A360-Sender.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 3 | Once the S3 URL is generated, click on `View in Infrastructure Composer` and Validate the template. This is recommended practice. |
 | 4 | Then click `Next` |
-| 5 | There will be a requirement to set parameters<br><br><div align="center"><img src="img/seq-8-sender.png" width="700px" alt="image"></div> |
+| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="759" height="918" alt="seq-8-sender" src="https://github.com/user-attachments/assets/6f70bd17-1aa8-4356-8677-329f9b883c1b" /></div> |
 | 6 | Click `Next` and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click `Next` and proceed to create the CloudFormation template. |
 | 8 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
