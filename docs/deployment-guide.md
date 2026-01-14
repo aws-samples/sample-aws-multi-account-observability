@@ -1,7 +1,7 @@
 # Deployment Guide
-There are two implementation for the Analytics account. Based on the V1.xx release and customer feedback we added a mechanism that would allow you to use an EC2 & SSM agent for the Receiver, this is applicable for large datasets that might not be able to process within the 15 minute time window provisioned by lambda.
+The Analytics account offers two deployment options. Following V1.xx customer feedback, we introduced an EC2 & SSM agent receiver option for processing large datasets that exceed Lambda's 15-minute execution limit.
 
-The below is a comprehensive details on both the different options:
+Below are comprehensive details for both options:
 
 ## Table of Contents
 
