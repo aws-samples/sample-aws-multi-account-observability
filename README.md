@@ -26,7 +26,7 @@ The solution implements an automated pub-sub data flow where spoke accounts publ
 ## Architecture of Multi Account Observability
 > **📋 NOTE:** For detailed technical documnetation, see the [Deployment Guide](docs/deployment-guide.md).
 <div align=center>
-<img src="docs/img/A360-Generic.png" alt="View360 Analytics Architecture" width="700px">
+<img src="https://github.com/user-attachments/assets/1ab34c4e-d4c3-4c41-b053-3e0cbdd869e5" alt="View360 Analytics Architecture" width="700px">
 </div>
 <br/>
 
