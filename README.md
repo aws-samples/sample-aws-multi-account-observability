@@ -79,7 +79,7 @@ The solution automatically collects comprehensive data across 15+ AWS service ca
 ## Cost
 Comprehensive annual cost estimates for the analytics account infrastructure, including all AWS services required for multi-account observability. Costs are based on moderate usage patterns and may vary significantly depending on data volume, number of connected accounts, query frequency, user activity, regional deployment, and specific configuration choices.
 
-| Service | Option A (Serverless) | Option B (EC2) | Justification |
+| Service | Option A (Serverless) | Option B (EC2) | Comments |
 |---------|----------------------|----------------|---------------|
 | Aurora PostgreSQL | $2,278 | $2,278 | Same database required for both options |
 | Lambda Functions | $100 | $0 | Serverless uses Lambda for processing; EC2 option doesn't |
