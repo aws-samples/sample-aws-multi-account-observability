@@ -195,7 +195,7 @@ Using a Serverless approach with only Lambda functions handling the transactions
 
 
 # Option B : Lambda + EC2 + SSM Deployment
-Using a EC2 & SSM agent in the Receiver with only Lambda functions handling the transactions
+Using a EC2 & SSM agent in the Receiver with a Lambda Function to invoke based on events.
 
 ## Architecture
 
