@@ -170,7 +170,7 @@ The MIT License permits use, modification, and distribution of this software for
 - **Troubleshooting**: Review CloudWatch logs and verify IAM permissions
 
 ### Support Resources
-- 📖 [Detailed Deployment Guide](docs/DEPLOYMENT_GUIDE.md)
+- 📖 [Detailed Deployment Guide](docs/deployment-guide.md)
 - 🔧 [AWS API Documentation](docs/aws-api-documentation.md)
 - 🔄 [Migration Guide v1.x to v2.x](migrations/00-v1.x-to-v2.x-migration/migration-guide.md)
 - 📊 [SQL Helper Guide](sql/a360-sql-helper.md)
