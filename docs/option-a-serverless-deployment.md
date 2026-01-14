@@ -1,7 +1,7 @@
 # Option A - Serverless Deployment
 This is a comprehensive wiki guide for View 360 (Multi account observability) within AWS. Using a Serverless approach with only Lambda functions handling the transactions.
 
-<div align="center"> <img src="https://github.com/user-attachments/assets/4caca7b8-07b3-488d-9ab3-ca3f47cd0802" alt="View360 Analytics Architecture" width="800px"> </div>
+<div align="center"> <img width="962" height="767" alt="A360-Option1-Lambda" src="https://github.com/user-attachments/assets/4caca7b8-07b3-488d-9ab3-ca3f47cd0802" /> </div>
 
 
 # Steps to Deploy
@@ -130,7 +130,6 @@ This is a comprehensive wiki guide for View 360 (Multi account observability) wi
 > Before running this script please make sure your Amazon Quick Suite has access to Secrets Manager
 > Log in to Amazon Quick Suite > Manage Quick Suite > AWS Resources > Check the box which says AWS Secrets Manager > Select your Secret > Click Save
 
-
 | Step | Description |
 |------|-------------|
 | 1 | Open `CloudFormation` in AWS (the account you wish for it to be an Analytics account) the below steps: **Create Stack** > **Choose an existing template** > **Upload the template file** |
@@ -143,10 +142,6 @@ This is a comprehensive wiki guide for View 360 (Multi account observability) wi
 | 8 | Upon `CREATION_COMPLETE` navigate to the Outputs Tab and note the information inside. |
 | 9 | Open the Lambda and search for a function `<stack-name>-qs-migration` |
 | 10 | Open the lambda function and navigate to the `Test tab` & Click `Test` to execute the template migration |
-
-
-
-
 
 ## Step 8: Sender Accounts
 
