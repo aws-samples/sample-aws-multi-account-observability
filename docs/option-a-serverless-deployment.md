@@ -1,7 +1,7 @@
 # Option A - Serverless Deployment
 This is a comprehensive wiki guide for View 360 (Multi account observability) within AWS. Using a Serverless approach with only Lambda functions handling the transactions.
 
-<div align="center"> <img src="img/A360-Option1-Lambda.png" alt="View360 Analytics Architecture" width="800px"> </div>
+<div align="center"> <img src="https://github.com/user-attachments/assets/4caca7b8-07b3-488d-9ab3-ca3f47cd0802" alt="View360 Analytics Architecture" width="800px"> </div>
 
 
 # Steps to Deploy
@@ -15,7 +15,7 @@ This is a comprehensive wiki guide for View 360 (Multi account observability) wi
 | 3 | Once the S3 URL is generated, click on View in Infrastructure Composer and Validate the template. This is recommended practice. |
 | 4 | Then click Next |
 | 5 | There will be a requirement to set parameters, to configure this account. *Note: For this implementation, please make sure to select ```NO``` for 1.3 Deploy EC2 Receiver (with VPC Endpoints). |
-|   | <div align="center"> <img src="img/seq-1-option-a.png" alt="View360 Analytics Architecture" width="700px"> </div> |
+|   | <div align="center"> <img width="682" height="836" alt="seq-1-option-a" src="https://github.com/user-attachments/assets/9a360d8a-319a-4685-96b1-b1db38f65918" /> </div> |
 | 6 | Click Next and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click Next and proceed to create the CloudFormation template. |
 | 8 | Upon ```CREATION_COMPLETE``` navigate to the Outputs Tab and note the information inside. |
@@ -137,12 +137,16 @@ This is a comprehensive wiki guide for View 360 (Multi account observability) wi
 | 2 | Browse and upload the file `A360-QS-Migration.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 3 | Once the S3 URL is generated, click on `View in Infrastructure Composer` and `Validate` the template. This is recommended practice. |
 | 4 | Then click `Next` |
-| 5 | There will be a requirement to set parameters<br><br><div align="center"><img src="img/seq-7-migration.png" width="700px" alt="Migration Cloud Formation"></div> |
+| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="755" height="816" alt="seq-7-migration" src="https://github.com/user-attachments/assets/4f09be82-08be-46a1-91f7-15e1e124e282" /></div> |
 | 6 | Click `Next` and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click `Next` and proceed to create the CloudFormation template. |
 | 8 | Upon `CREATION_COMPLETE` navigate to the Outputs Tab and note the information inside. |
 | 9 | Open the Lambda and search for a function `<stack-name>-qs-migration` |
 | 10 | Open the lambda function and navigate to the `Test tab` & Click `Test` to execute the template migration |
+
+
+
+
 
 ## Step 8: Sender Accounts
 
@@ -154,7 +158,7 @@ This is a comprehensive wiki guide for View 360 (Multi account observability) wi
 | 2 | Browse and upload the file `A360-Sender.yaml` which could be found within the `sample-aws-multi-account-observability/cloudformation-template/` folder |
 | 3 | Once the S3 URL is generated, click on `View in Infrastructure Composer` and Validate the template. This is recommended practice. |
 | 4 | Then click `Next` |
-| 5 | There will be a requirement to set parameters<br><br><div align="center"><img src="img/seq-8-sender.png" width="700px" alt="image"></div> |
+| 5 | There will be a requirement to set parameters<br><br><div align="center"><img width="759" height="918" alt="seq-8-sender" src="https://github.com/user-attachments/assets/6f70bd17-1aa8-4356-8677-329f9b883c1b" /></div> |
 | 6 | Click `Next` and on the next screen under tags, give it a tag for good account hygiene. |
 | 7 | Click `Next` and proceed to create the CloudFormation template. |
 | 8 | Upon "CREATION_COMPLETE" navigate to the Outputs Tab and note the information inside. |
