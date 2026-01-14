@@ -742,24 +742,6 @@ Resources:
             if __name__ == "__main__":
                 lambda_handler()
 
-
-
-  QSMigrationLogGroup:
-    Type: AWS::Logs::LogGroup
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: "Log group encrypted with KMS"
-      checkov:
-        skip:
-          - id: "CKV_AWS_158"
-            comment: "Log group encrypted with KMS key"
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${QSMigrationLambda}"
-      RetentionInDays: 14
-      KmsKeyId: !Ref KMSKeyArn
-
 Outputs:
   LambdaFunctionArn:
     Description: Lambda Function ARN
