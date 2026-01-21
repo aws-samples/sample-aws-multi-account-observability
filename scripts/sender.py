@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv() """
-
+load_dotenv()
+ """
 """ IMPORTS """
 import sys
 import boto3
@@ -512,8 +512,8 @@ class AWSResourceManager:
             self.get_date()
         
         # Make dates timezone-aware for comparison
-        start_date_aware = self.start_date.replace(tzinfo=timezone.utc) if self.start_date and self.start_date.tzinfo is None else self.start_date
-        end_date_aware = self.end_date.replace(tzinfo=timezone.utc) if self.end_date and self.end_date.tzinfo is None else self.end_date
+        start_date_aware    = self.start_date.replace(tzinfo=timezone.utc) if self.start_date and self.start_date.tzinfo is None else self.start_date
+        end_date_aware      = self.end_date.replace(tzinfo=timezone.utc) if self.end_date and self.end_date.tzinfo is None else self.end_date
         
         return start_date_aware, end_date_aware
 
@@ -872,16 +872,23 @@ class AWSResourceManager:
             
             # Get individual patches for this instance directly
             patch_response = AWSResponse(ssm.describe_instance_patches(InstanceId=instance_id))
-            for patch in patch_response.data.get('Patches', []):
-                patches.append({
-                                'instance_id'   : instance_id,
-                                'title'         : patch.get('Title'),
-                                'classification': patch.get('Classification') or "Normal",
-                                'severity'      : patch.get('Severity') or "None",
-                                'state'         : patch.get('State'),
-                                'installed_time': patch.get('InstalledTime')
-                            })
             
+            # Get timezone-aware dates for comparison
+            start_date_aware, end_date_aware = self._get_timezone_aware_dates()
+
+            for patch in patch_response.data.get('Patches', []):
+                installed_time = patch.get('InstalledTime')
+
+                if installed_time and start_date_aware <= installed_time <= end_date_aware:
+                    patches.append({
+                                    'instance_id'   : instance_id,
+                                    'title'         : patch.get('Title'),
+                                    'classification': patch.get('Classification') or "Normal",
+                                    'severity'      : patch.get('Severity') or "None",
+                                    'state'         : patch.get('State'),
+                                    'installed_time': patch.get('InstalledTime')
+                                })
+                
             return patches
         except Exception as e:
             print(f"Error getting patch details for {instance_id}: {str(e)}")
@@ -902,9 +909,9 @@ class AWSResourceManager:
                 'certificates'  : []
             }
             
-            instances = AWSResponse(ssm.describe_instance_information())
+            instances   = AWSResponse(ssm.describe_instance_information())
             # Write to JSON file
-            
+            #print(json.dumps(instances.data.get('InstanceInformationList', []), indent=2, cls=DateTimeEncoder))
 
             for instance in instances.data.get('InstanceInformationList', []):
                 instance_id = instance['InstanceId']
@@ -2532,13 +2539,11 @@ if __name__ == "__main__":
     start   = None
     end     = None
 
-    start   = "01-01-2026"      # January 1 2026
-    end     = "21-01-2026"      # January 21 2026
+    start   = "08-01-2026"  # January 07, 2026
+    end     = "09-01-2026"  # January 09, 2026
 
-    """ UN-COMMENT THE LINE BELOW TO RUN HISTORY """
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     
-    """ COMMENT THE LINE BELOW TO RUN HISTORY """
     """ 2. Run Daily Data Sets """
     result  = lambda_handler({"history":False})
 
