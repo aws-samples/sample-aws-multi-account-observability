@@ -81,17 +81,16 @@ Comprehensive annual cost estimates for the analytics account infrastructure, in
 
 | Service | Option A (Serverless) | Option B (EC2) | Comments |
 |---------|----------------------|----------------|---------------|
-| Aurora PostgreSQL | $2,278 | $2,278 | Same database required for both options |
-| Lambda Functions | $100 | $0 | Serverless uses Lambda for processing; EC2 option doesn't |
-| EC2 Instance | $0 | $147 | EC2 option uses t4g.small instance for processing |
-| VPC Endpoints | $0 | $350 | EC2 requires 4 interface endpoints for private connectivity |
-| S3 Storage | $150 | $150 | Same storage requirements for both options |
-| QuickSight | $1,176 | $1,176 | Same dashboard and user licensing costs |
-| KMS | $16 | $16 | Same encryption requirements |
-| CloudWatch | $25 | $25 | Same monitoring and logging needs |
-| VPC/Networking | $50 | $50 | Same VPC infrastructure costs |
-| Other Services | $12 | $12 | Same supporting services (SQS, Secrets Manager, etc.) |
-| **TOTAL/YEAR** | **~$3,807** | **~$4,204** | EC2 option costs $397 more due to instance and endpoints |
+| Aurora PostgreSQL | $156.64 | $156.64 | Same database required for both options |
+| Lambda Functions | $68 | $0.13 | Serverless uses Lambda for processing; EC2 option doesn't |
+| EC2 Instance | $0 | $3.80 | EC2 option uses t4g.small instance for processing |
+| S3 Storage | $0.67 | $0.67 | Same storage requirements for both options |
+| QuickSight | $141 | $141 | Same dashboard and user licensing costs |
+| KMS | $7 | $7 | Same encryption requirements |
+| VPC/Networking | $28 | $114 | Same VPC infrastructure costs with endpoints|
+| Other Services | $0.41 | $0.41 | Same supporting services (SQS, Secrets Manager, etc.) |
+| **TOTAL/MONTH** | **~$402.57** | **~$423.58** |  |
+| **TOTAL/YEAR** | **~$4,830** | **~$5,082** | EC2 option costs $252 more annually due to the instance and VPC endpoints, but provides predictable fixed costs. The Serverless option has variable costs that depend on Lambda execution time and data volume. |
 
 
 >**⚠️ DISCLAIMER**
