@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv()
- """
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -989,7 +989,7 @@ class AWSResourceManager:
                     try:
                         result[key] = future.result() or []
                     except Exception as e:
-                        ##print(f"Error fetching")
+                        #print(f"Error fetching {key}: {str(e)}")
                         result[key] = []
             
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)
@@ -1009,47 +1009,64 @@ class AWSResourceManager:
             securityhub = boto3.client('securityhub', region_name=REGION)
             service_findings = {}
             
-            # Query 1: Get NEW findings updated today
+            # Query 1: Get NEW findings Created today
             next_token = None
-            while True:
-                params = {
-                    'Filters'   : {
-                                    'UpdatedAt'     :   [{'Start': self.start_date.isoformat() if self.start_date else '', 'End': self.end_date.isoformat() if self.end_date else ''}],
-                                    'AwsAccountId'  :   [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
-                                    'SeverityLabel' :   [
-                                                            {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
-                                                            {'Value': 'HIGH', 'Comparison': 'EQUALS'},
-                                                            {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
-                                                            {'Value': 'LOW', 'Comparison': 'EQUALS'}
-                                                        ],
-                                    'WorkflowStatus':   [
-                                                            {'Value': 'NEW', 'Comparison': 'EQUALS'},
+            params = {
+                'Filters'   : {
+                                'CreatedAt'     :   [{'Start': self.start_date.isoformat() if self.start_date else '', 'End': self.end_date.isoformat() if self.end_date else ''}],
+                                'RecordState'   :   [{'Value': 'ACTIVE', 'Comparison': 'EQUALS'}],
+                                'AwsAccountId'  :   [{'Value': self.account_id, 'Comparison': 'EQUALS'}],
+                                'SeverityLabel' :   [
+                                                        {'Value': 'CRITICAL', 'Comparison': 'EQUALS'},
+                                                        {'Value': 'HIGH', 'Comparison': 'EQUALS'},
+                                                        {'Value': 'MEDIUM', 'Comparison': 'EQUALS'},
+                                                        {'Value': 'LOW', 'Comparison': 'EQUALS'}
+                                                    ],
+                                'WorkflowStatus':   [
+                                                        {'Value': 'NEW', 'Comparison': 'EQUALS'}
+                                                    ],
+                            },
+                'MaxResults': 100
+            }
+
+            for query_type in ['created', 'updated']:
+                # Query 2: Get findings UPDATED today whichw as either, RESOLVED, NOTIFIED or SUPPRESSED
+                if query_type == 'updated':
+                    params['Filters'].pop('CreatedAt')
+                    params['Filters']['UpdatedAt']      = [ {'Start': self.start_date.isoformat() if self.start_date else '', 'End': self.end_date.isoformat() if self.end_date else ''}]
+                    params['Filters']['WorkflowStatus'] = [
                                                             {'Value': 'RESOLVED', 'Comparison': 'EQUALS'},
+                                                            {'Value': 'NOTIFIED', 'Comparison': 'EQUALS'},
                                                             {'Value': 'SUPPRESSED', 'Comparison': 'EQUALS'}
-                                                        ],
-                                },
-                    'MaxResults': 100
-                }
+                                                          ]
                 
-                if next_token:
-                    params['NextToken'] = next_token
-            
-                response = AWSResponse(securityhub.get_findings(**params))
-                if response.status != 200:
-                    break
+                params.pop('NextToken', None)
+                next_token = None
+
+                while True:
+                    if next_token:
+                        params['NextToken'] = next_token
                 
-                for finding in response.data['Findings']:
-                    self._process_finding(finding, service_findings)
-            
-                next_token = response.data.get('NextToken')
-                if not next_token:
-                    break
+                    response = AWSResponse(securityhub.get_findings(**params))
+                    if response.status != 200:
+                        break
+                    
+                    for finding in response.data['Findings']:
+                        self._process_finding(finding, service_findings)
+                
+                    next_token = response.data.get('NextToken')
+                    if not next_token:
+                        break
             
 
             
             result = sorted(service_findings.values(), key=lambda x: x['total_findings'], reverse=True)
             self.set_log(def_type=AWSResourceType.SECURITY)
-               
+            
+            """ TROUBLESHOOTING ONLY """
+            #print(f"from: {self.start_date} to: {self.end_date}")
+            #print(f"Total Findings:{result}")
+            
             return result
             
         except Exception as e:
@@ -1110,7 +1127,7 @@ class AWSResourceManager:
                                                         'generator_id'      : finding.get('GeneratorId'),
                                                         'generator'         : finding.get('ProductName', '')
                                                     })
-
+       
     #Getting from Guard Duty
     def get_guard_duty_security(self):
         """Get GuardDuty threat findings within date range"""
@@ -2515,11 +2532,13 @@ if __name__ == "__main__":
     start   = None
     end     = None
 
-    start   = "08-12-2025"    # September 5 2025
-    #end     = "03-12-2025"   # September 10 2025
+    start   = "01-01-2026"      # January 1 2026
+    end     = "21-01-2026"      # January 21 2026
 
+    """ UN-COMMENT THE LINE BELOW TO RUN HISTORY """
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     
+    """ COMMENT THE LINE BELOW TO RUN HISTORY """
     """ 2. Run Daily Data Sets """
     result  = lambda_handler({"history":False})
-    #print(result)
+
