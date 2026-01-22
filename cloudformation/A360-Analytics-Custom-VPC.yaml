@@ -80,19 +80,18 @@ Parameters:
   
   CustomerName:
     Type: String
-    Default: "None"
+    Default: ""
     Description: Customer name for external accounts or Business Unit name for internal accounts
     
   PartnerName:
     Type: String
-    Default: "None"
+    Default: ""
     Description: Specify the managing partner name for externally managed accounts or the department name for internal business unit accounts
   
   Environment:
     Type: String
-    Default: "None"
+    Default: "PRODUCTION"
     AllowedValues:
-      - "None"
       - "PRODUCTION"
       - "STAGING"
       - "TEST"
@@ -102,9 +101,8 @@ Parameters:
   
   Category:
     Type: String
-    Default: "None"
+    Default: "Both"
     AllowedValues:
-      - "None"
       - "Both"
       - "Internet"
       - "Intranet"
@@ -112,7 +110,7 @@ Parameters:
 
   ProductName:
     Type: String
-    Default: "View360"
+    Default: ""
     Description: Name of the Product/Workload/Application that is currently running in this account. If there are multiple of them split them by comma's (,). e.g Product A, Product B
 
   ExistingVpcId:
