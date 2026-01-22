@@ -608,7 +608,7 @@ class AWSResourceManager:
         try:
             if not self.get_date():
                 return None
-                
+            
             response = AWSResponse(boto3.client('ce').get_cost_and_usage(
                 TimePeriod  =   {'Start': self.start_date.strftime('%Y-%m-%d') if self.start_date else '', 'End': self.end_date.strftime('%Y-%m-%d') if self.end_date else ''},
                 Granularity =   self.interval,
@@ -656,7 +656,7 @@ class AWSResourceManager:
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SERVICE, status="Fail", value={'services_data': str(e)})
             return None
-
+    
     #3. Fetching Config Data
     def get_config(self):
         try:
@@ -700,27 +700,33 @@ class AWSResourceManager:
             compliant_count         = 0
             non_compliant_count     = 0
             non_compliant_resources = []
+            curr_non_compliant      = 0 # Non-Compliant rules on the date this script is run
+            curr_compliant          = 0 # Compliant rules on the date this script is run
 
             paginator = config_client.get_paginator('describe_compliance_by_config_rule')
-
-            for page in paginator.paginate():
+            
+            for page in paginator.paginate(ComplianceTypes=['COMPLIANT', 'NON_COMPLIANT']):
                 for rule in page.get('ComplianceByConfigRules', []):
                     compliance_type = rule.get('Compliance', {}).get('ComplianceType')
                     
-                    if compliance_type == 'COMPLIANT':
-                        compliant_count += 1
-                    elif compliance_type == 'NON_COMPLIANT':
-                        non_compliant_count += 1
+                    if compliance_type in ('COMPLIANT', 'NON_COMPLIANT'):
+
+                        if compliance_type == 'COMPLIANT':
+                            compliant_count += 1
+                        elif compliance_type == 'NON_COMPLIANT':
+                            non_compliant_count += 1
+
                         rule_name           = rule['ConfigRuleName']
                         conformance_pack    = rule_to_pack_mapping.get(rule_name, 'Standalone')
-                        
+                        has_matching_result = False
+
                         try:
                             details = config_client.get_compliance_details_by_config_rule(
                                 ConfigRuleName=rule_name,
-                                ComplianceTypes=['NON_COMPLIANT'],
+                                ComplianceTypes=[compliance_type],
                                 Limit=50
                             )
-                            #print(details)
+
                             for eval_result in details['EvaluationResults']:
                                 #config_rule_invoked_time = eval_result.get('ConfigRuleInvokedTime')
                                 result_time = eval_result.get('ResultRecordedTime')
@@ -729,21 +735,36 @@ class AWSResourceManager:
                                 if result_time:
                                     result_time_utc = result_time.astimezone(timezone.utc)
                                     
-                                    #if start_datetime <= result_time_utc <= end_datetime:
-                                    qualifier   = eval_result['EvaluationResultIdentifier']['EvaluationResultQualifier']
-                                    non_compliant_resources.append({
-                                                                    'rule_name'                 : rule_name,
-                                                                    'resource_id'               : qualifier.get('ResourceId'),
-                                                                    'resource_type'             : qualifier.get('ResourceType'),
-                                                                    'config_rule_invoked_time'  : result_time,
-                                                                    'conformance_pack'          : conformance_pack,
-                                                                    'compliance_type'           : eval_result.get('ComplianceType'),
-                                                                    'annotation'                : eval_result.get('Annotation'),
-                                                                    'evaluation_mode'           : qualifier.get('EvaluationMode')
-                                                                    })
-                                    
+                                    if start_datetime <= result_time_utc <= end_datetime:
+                                        has_matching_result = True
+                                        qualifier   = eval_result['EvaluationResultIdentifier']['EvaluationResultQualifier']
+                                        non_compliant_resources.append({
+                                                                        'rule_name'                 : rule_name,
+                                                                        'resource_id'               : qualifier.get('ResourceId'),
+                                                                        'resource_type'             : qualifier.get('ResourceType'),
+                                                                        'config_rule_invoked_time'  : result_time,
+                                                                        'conformance_pack'          : conformance_pack,
+                                                                        'compliance_type'           : eval_result.get('ComplianceType'),
+                                                                        'annotation'                : eval_result.get('Annotation'),
+                                                                        'evaluation_mode'           : qualifier.get('EvaluationMode')
+                                                                        })
+                            if has_matching_result:
+                                
+                                if compliance_type == 'COMPLIANT':
+                                    curr_compliant += 1 # Compliant rules on the date this script is run
+                                elif compliance_type == 'NON_COMPLIANT':
+                                    curr_non_compliant += 1 # Non-Compliant rules on the date this script is run
+                                 
                         except Exception as e:
                             self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Compliance rules: "+str(e)})
+
+
+                    
+                        rule_name           = rule['ConfigRuleName']
+                        conformance_pack    = rule_to_pack_mapping.get(rule_name, 'Standalone')
+                        has_matching_result = False
+                        
+                        
 
             # Step 3: Calculate totals and score
             
@@ -756,9 +777,11 @@ class AWSResourceManager:
                                 'total_rules'               : total_rules,
                                 'compliant_rules'           : compliant_count,
                                 'non_compliant_rules'       : non_compliant_count,
+                                'curr_non_compliant'        : curr_non_compliant,
+                                'curr_compliant'            : curr_compliant,
                                 'non_compliant_resources'   : non_compliant_resources
                               }
-
+            #print({'curr_non_compliant': curr_non_compliant,'curr_compliant': curr_compliant,})
             self.data.set_data(attr=AWSResourceType.CONFIG, data=config_data)
             self.set_log(def_type=AWSResourceType.CONFIG)
 
@@ -770,29 +793,35 @@ class AWSResourceManager:
 
     #4. Fetching Cost Data
     def get_cost(self):
+        cost_filter =   {
+                            'And': [
+                                {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}},
+                                {'Dimensions': {'Key': 'REGION', 'Values': [self.region]}}
+                            ]
+                        }
         try:
             if not self.get_date():
                 return None
                 
             ce_client   = boto3.client('ce')
             start_date  = self.start_date.strftime('%Y-%m-%d') if self.start_date else ''
-            end_date    = self.end_date.strftime('%Y-%m-%d') if self.end_date else ''
+            end_date    = self.end_date.strftime('%Y-%m-%d') if self.end_date else '' # takes for the current date
             
             # Get all cost metrics
             current_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': start_date, 'End': end_date},
                 Granularity=self.interval,
-                Metrics=['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'],
-                Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+                Metrics=['UnblendedCost'], #, 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'
+                Filter=cost_filter
             ))
             
             # Get service breakdown
             service_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': start_date, 'End': end_date},
                 Granularity=self.interval,
-                Metrics=['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'],
+                Metrics=['UnblendedCost'], #, 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'
                 GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
-                Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+                Filter=cost_filter
             ))
             
             prev_end    = self.start_date.strftime('%Y-%m-%d') if self.start_date else ''
@@ -801,17 +830,17 @@ class AWSResourceManager:
             previous_costs = AWSResponse(ce_client.get_cost_and_usage(
                 TimePeriod={'Start': prev_start, 'End': prev_end},
                 Granularity=self.interval,
-                Metrics=['UnblendedCost', 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'],
-                Filter={'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+                Metrics=['UnblendedCost'], #, 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'
+                Filter=cost_filter
             ))
             
             # Calculate totals for all metrics - always sum for consistency
             def extract_costs(response):
                 return {
                     'unblended'     : sum(float(r['Total']['UnblendedCost']['Amount']) for r in response.data['ResultsByTime']),
-                    'blended'       : sum(float(r['Total']['BlendedCost']['Amount']) for r in response.data['ResultsByTime']),
-                    'net_unblended' : sum(float(r['Total']['NetUnblendedCost']['Amount']) for r in response.data['ResultsByTime']),
-                    'amortized'     : sum(float(r['Total']['AmortizedCost']['Amount']) for r in response.data['ResultsByTime'])
+                    'blended'       : 0, #sum(float(r['Total']['BlendedCost']['Amount']) for r in response.data['ResultsByTime']),
+                    'net_unblended' : 0, #sum(float(r['Total']['NetUnblendedCost']['Amount']) for r in response.data['ResultsByTime']),
+                    'amortized'     : 0, #sum(float(r['Total']['AmortizedCost']['Amount']) for r in response.data['ResultsByTime'])
                 }
             
             current     = extract_costs(current_costs)
@@ -836,7 +865,8 @@ class AWSResourceManager:
                 forecast = AWSResponse(ce_client.get_cost_forecast(
                     TimePeriod={'Start': end_date, 'End': forecast_end},
                     Metric='UNBLENDED_COST',
-                    Granularity="MONTHLY"
+                    Granularity="MONTHLY",
+                    Filter=cost_filter
                 ))
                 forecast_data = [{'period': {'start': p['TimePeriod']['Start'], 'end': p['TimePeriod']['End']}, 'amount': float(p['MeanValue'])}
                                 for p in forecast.data.get('ForecastResultsByTime', [])]
@@ -2048,93 +2078,155 @@ class AWSResourceManager:
                         }
             
             # EC2 Instances
-            ec2 = boto3.client('ec2', region_name=REGION)
-            resp = AWSResponse(ec2.describe_instances())
-            for reservation in resp.data.get('Reservations', []):
-                for instance in reservation.get('Instances', []):
-                    resources.append(create_standard_resource(
-                        'EC2', 'Instance', instance.get('InstanceId'),
-                        next((tag['Value'] for tag in instance.get('Tags', []) if tag['Key'] == 'Name'), ''),
-                        REGION, instance.get('Placement', {}).get('AvailabilityZone'),
-                        instance.get('State', {}).get('Name'),
-                        instance_type=instance.get('InstanceType'),
-                        vpc_id=instance.get('VpcId')
-                    ))
+            def fetch_ec2():
+                ec2 = boto3.client('ec2', region_name=REGION)
+                resp = AWSResponse(ec2.describe_instances())
+                for reservation in resp.data.get('Reservations', []):
+                    for instance in reservation.get('Instances', []):
+                        resources.append(create_standard_resource(
+                            'EC2', 'Instance', instance.get('InstanceId'),
+                            next((tag['Value'] for tag in instance.get('Tags', []) if tag['Key'] == 'Name'), ''),
+                            REGION, instance.get('Placement', {}).get('AvailabilityZone'),
+                            instance.get('State', {}).get('Name'),
+                            instance_type=instance.get('InstanceType'),
+                            vpc_id=instance.get('VpcId')
+                        ))
             
             # RDS Instances
-            rds = boto3.client('rds', region_name=REGION)
-            resp = AWSResponse(rds.describe_db_instances())
-            for db in resp.data.get('DBInstances', []):
-                resources.append(create_standard_resource(
-                    'RDS', 'DBInstance', db.get('DBInstanceIdentifier'),
-                    db.get('DBInstanceIdentifier'), REGION, db.get('AvailabilityZone'),
-                    db.get('DBInstanceStatus'),
-                    engine=db.get('Engine'),
-                    instance_class=db.get('DBInstanceClass'),
-                    multi_az=db.get('MultiAZ')
-                ))
+            def fetch_rds():
+                rds = boto3.client('rds', region_name=REGION)
+                resp = AWSResponse(rds.describe_db_instances())
+                for db in resp.data.get('DBInstances', []):
+                    resources.append(create_standard_resource(
+                        'RDS', 'DBInstance', db.get('DBInstanceIdentifier'),
+                        db.get('DBInstanceIdentifier'), REGION, db.get('AvailabilityZone'),
+                        db.get('DBInstanceStatus'),
+                        engine=db.get('Engine'),
+                        instance_class=db.get('DBInstanceClass'),
+                        multi_az=db.get('MultiAZ')
+                    ))
             
             # EBS Volumes
-            resp = AWSResponse(ec2.describe_volumes())
-            for volume in resp.data.get('Volumes', []):
-                resources.append(create_standard_resource(
-                    'EBS', 'Volume', volume.get('VolumeId'),
-                    next((tag['Value'] for tag in volume.get('Tags', []) if tag['Key'] == 'Name'), ''),
-                    REGION, volume.get('AvailabilityZone'), volume.get('State'),
-                    size_gb=volume.get('Size', 0),
-                    volume_type=volume.get('VolumeType')
-                ))
+            def fetch_ebs():
+                ec2 = boto3.client('ec2', region_name=REGION)
+                resp = AWSResponse(ec2.describe_volumes())
+                for volume in resp.data.get('Volumes', []):
+                    resources.append(create_standard_resource(
+                        'EBS', 'Volume', volume.get('VolumeId'),
+                        next((tag['Value'] for tag in volume.get('Tags', []) if tag['Key'] == 'Name'), ''),
+                        REGION, volume.get('AvailabilityZone'), volume.get('State'),
+                        size_gb=volume.get('Size', 0),
+                        volume_type=volume.get('VolumeType')
+                    ))
             
             # S3 Buckets
-            s3 = boto3.client('s3', region_name=REGION)
-            resp = AWSResponse(s3.list_buckets())
-            for bucket in resp.data.get('Buckets', []):
-                resources.append(create_standard_resource(
-                    'S3', 'Bucket', bucket.get('Name'), bucket.get('Name'),
-                    REGION, None, 'Active',
-                    creation_date=bucket.get('CreationDate').isoformat() if bucket.get('CreationDate') else None
-                ))
+            def fetch_s3():
+                s3 = boto3.client('s3', region_name=REGION)
+                resp = AWSResponse(s3.list_buckets())
+                for bucket in resp.data.get('Buckets', []):
+                    resources.append(create_standard_resource(
+                        'S3', 'Bucket', bucket.get('Name'), bucket.get('Name'),
+                        REGION, None, 'Active',
+                        creation_date=bucket.get('CreationDate').isoformat() if bucket.get('CreationDate') else None
+                    ))
             
             # Load Balancers
-            elb = boto3.client('elbv2', region_name=REGION)
-            resp = AWSResponse(elb.describe_load_balancers())
-            for lb in resp.data.get('LoadBalancers', []):
-                az_list = [az.get('ZoneName') for az in lb.get('AvailabilityZones', [])]
-                resources.append(create_standard_resource(
-                    'ELB', 'LoadBalancer', lb.get('LoadBalancerName'),
-                    lb.get('LoadBalancerName'), REGION, ','.join(az_list),
-                    lb.get('State', {}).get('Code'),
-                    type=lb.get('Type'),
-                    scheme=lb.get('Scheme')
-                ))
+            def fetch_elb():
+                elb = boto3.client('elbv2', region_name=REGION)
+                resp = AWSResponse(elb.describe_load_balancers())
+                for lb in resp.data.get('LoadBalancers', []):
+                    az_list = [az.get('ZoneName') for az in lb.get('AvailabilityZones', [])]
+                    resources.append(create_standard_resource(
+                        'ELB', 'LoadBalancer', lb.get('LoadBalancerName'),
+                        lb.get('LoadBalancerName'), REGION, ','.join(az_list),
+                        lb.get('State', {}).get('Code'),
+                        type=lb.get('Type'),
+                        scheme=lb.get('Scheme')
+                    ))
             
             # Auto Scaling Groups
-            asg = boto3.client('autoscaling', region_name=REGION)
-            resp = AWSResponse(asg.describe_auto_scaling_groups())
-            for group in resp.data.get('AutoScalingGroups', []):
-                resources.append(create_standard_resource(
-                    'AutoScaling', 'AutoScalingGroup', group.get('AutoScalingGroupName'),
-                    group.get('AutoScalingGroupName'), REGION,
-                    ','.join(group.get('AvailabilityZones', [])),
-                    'Active' if group.get('Instances') else 'Inactive',
-                    instance_count=len(group.get('Instances', [])),
-                    min_size=group.get('MinSize'),
-                    max_size=group.get('MaxSize')
-                ))
+            def fetch_asg():
+                asg = boto3.client('autoscaling', region_name=REGION)
+                resp = AWSResponse(asg.describe_auto_scaling_groups())
+                for group in resp.data.get('AutoScalingGroups', []):
+                    resources.append(create_standard_resource(
+                        'AutoScaling', 'AutoScalingGroup', group.get('AutoScalingGroupName'),
+                        group.get('AutoScalingGroupName'), REGION,
+                        ','.join(group.get('AvailabilityZones', [])),
+                        'Active' if group.get('Instances') else 'Inactive',
+                        instance_count=len(group.get('Instances', [])),
+                        min_size=group.get('MinSize'),
+                        max_size=group.get('MaxSize')
+                    ))
             
             # Subnets
-            resp = AWSResponse(ec2.describe_subnets())
-            for subnet in resp.data.get('Subnets', []):
-                resources.append(create_standard_resource(
-                    'VPC', 'Subnet', subnet.get('SubnetId'),
-                    next((tag['Value'] for tag in subnet.get('Tags', []) if tag['Key'] == 'Name'), ''),
-                    REGION, subnet.get('AvailabilityZone'), subnet.get('State'),
-                    available_ip_count=subnet.get('AvailableIpAddressCount', 0),
-                    vpc_id=subnet.get('VpcId')
-                ))
+            def fetch_subnets():
+                ec2 = boto3.client('ec2', region_name=REGION)
+                resp = AWSResponse(ec2.describe_subnets())
+                for subnet in resp.data.get('Subnets', []):
+                    resources.append(create_standard_resource(
+                        'VPC', 'Subnet', subnet.get('SubnetId'),
+                        next((tag['Value'] for tag in subnet.get('Tags', []) if tag['Key'] == 'Name'), ''),
+                        REGION, subnet.get('AvailabilityZone'), subnet.get('State'),
+                        available_ip_count=subnet.get('AvailableIpAddressCount', 0),
+                        vpc_id=subnet.get('VpcId')
+                    ))
+            
+            # Lambda Functions
+            def fetch_lambda():
+                result = []
+                lambda_client = boto3.client('lambda', region_name=REGION)
+                paginator = lambda_client.get_paginator('list_functions')
+                for page in paginator.paginate():
+                    for func in page.get('Functions', []):
+                        vpc_config = func.get('VpcConfig', {})
+                        vpc_id = vpc_config.get('VpcId', '') if vpc_config else ''
+
+                        result.append(create_standard_resource(
+                            service_name='Lambda', 
+                            resource_type='Function', 
+                            resource_id=func.get('FunctionArn'),
+                            resource_name=func.get('FunctionName'), 
+                            region=REGION,
+                            availability_zone='Generic',
+                            state=func.get('State'),
+                            instance_type=func.get('Runtime'),
+                            vpc_id=vpc_id,
+                            engine=func.get('Runtime'),
+                            instance_class="",
+                            multi_az=True,
+                            size_gb=func.get('MemorySize', 128)/1024,
+                            volume_type="EphemeralStorage",
+                            creation_date=func.get('LastModified'),
+                            type=func.get('PackageType'),
+                            scheme=func.get('Architectures', ['x86_64'])[0],
+                            instance_count=1,
+                            min_size="",
+                            max_size=func.get('EphemeralStorage', {}).get('Size', 512),
+                            available_ip_count=None
+                        ))
+                return result
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(fetch_ec2),
+                    executor.submit(fetch_rds),
+                    executor.submit(fetch_ebs),
+                    executor.submit(fetch_s3),
+                    executor.submit(fetch_elb),
+                    executor.submit(fetch_asg),
+                    executor.submit(fetch_subnets),
+                    executor.submit(fetch_lambda)
+                ]
+                
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        resources.extend(result)
             
             self.data.set_data(attr=AWSResourceType.SERVICE_RESOURCES, data=resources)
             self.set_log(def_type=AWSResourceType.SERVICE_RESOURCES)
+            
             return resources
             
         except Exception as e:
@@ -2142,47 +2234,7 @@ class AWSResourceManager:
             return None
 
     #14. Fetching Inventory from Config
-    # WILL NOT BE USED AS IT REPLICATES THE get_service_resources() data sets, currently a placeholder for future use
-    def get_config_resource_inventory(self):
-        try:
-            # Use your existing service_resources data as inventory
-            #service_resources = self.get_services_resources()
-            service_resources = self.data.get_all_data()['service_resources']
-            inventory_data = []
-            for resource in service_resources or []:
-                inventory_data.append({
-                                        'resource_type'     : resource.get('service_name', 'Unknown'),
-                                        'resource_subtype'  : resource.get('resource_type', ''),
-                                        'resource_id'       : resource.get('resource_id', ''),
-                                        'resource_name'     : resource.get('resource_name', ''),
-                                        'region'            : resource.get('region', REGION),
-                                        'availability_zone' : resource.get('availability_zone', ''),
-                                        'state'             : resource.get('state', ''),
-                                        'instance_type'     : resource.get('instance_type', ''),
-                                        'instance_class'    : resource.get('instance_class', ''),
-                                        'engine'            : resource.get('engine', ''),
-                                        'vpc_id'            : resource.get('vpc_id', ''),
-                                        'size_gb'           : resource.get('size_gb', 0),
-                                        'volume_type'       : resource.get('volume_type', ''),
-                                        'creation_date'     : resource.get('creation_date', ''),
-                                        'multi_az'          : resource.get('multi_az', False),
-                                        'scheme'            : resource.get('scheme', ''),
-                                        'type'              : resource.get('type', ''),
-                                        'instance_count'    : resource.get('instance_count', 0),
-                                        'min_size'          : resource.get('min_size', 0),
-                                        'max_size'          : resource.get('max_size', 0),
-                                        'available_ip_count': resource.get('available_ip_count', 0)
-                                    })
-            
-            self.data.set_data(attr=AWSResourceType.CONFIG_INVENTORY, data=inventory_data)
-            self.set_log(def_type=AWSResourceType.CONFIG_INVENTORY, status="Pass")
-            #return inventory_data
-            return []
-            
-        except Exception as e:
-            self.set_log(def_type=AWSResourceType.CONFIG_INVENTORY, status="Fail", value={'config_inventory': str(e)})
-            return []
-
+    # REMOVED:get_config_resource_inventory()  as it replicates the service_resources
     #15. Fetching support tickets raised
     def get_support_tickets(self):
         try:
@@ -2230,118 +2282,65 @@ class AWSResourceManager:
 
 
 def get_data(interval="DAILY", start_date=None, end_date=None):
-    start_time = time.time()
-    process_times = {}
+    start_time      = time.time()
+    process_times   = {}
     
     sts_client      = boto3.client('sts')
-    
     identity        = AWSResponse(sts_client.get_caller_identity())
     account         = identity.data['Account']
     
-    end_date        = end_date
-    start_date      = None
-    
-    interval        = interval
-
     aws             = AWSResourceManager(account_id=account, interval=interval, start_date=start_date, end_date=end_date, region=REGION)
-
     
-    #1. Fetch Account Data
-    step_start = time.time()
-    aws.get_account_details()
-    process_times['account_details'] = round(time.time() - step_start, 2)
+    def timed_call(name, func):
+        step_start          = time.time()
+        func()
+        process_times[name] = round(time.time() - step_start, 2)
     
-    #2. Fetch Services Data  
-    step_start = time.time()
-    aws.get_services()
-    process_times['services'] = round(time.time() - step_start, 2)
+    # Run all data fetches in parallel
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {
+                    executor.submit(timed_call, 'account_details', aws.get_account_details): 'account_details',
+                    executor.submit(timed_call, 'services', aws.get_services): 'services',
+                    executor.submit(timed_call, 'config', aws.get_config): 'config',
+                    executor.submit(timed_call, 'cost', aws.get_cost): 'cost',
+                    executor.submit(timed_call, 'inventory', aws.get_inventory): 'inventory',
+                    executor.submit(timed_call, 'security', aws.get_security): 'security',
+                    executor.submit(timed_call, 'trusted_advisor', aws.get_trusted_advisor): 'trusted_advisor',
+                    executor.submit(timed_call, 'resilience_hub', aws.get_resilience_hub_apps): 'resilience_hub',
+                    executor.submit(timed_call, 'health', aws.get_health): 'health',
+                    executor.submit(timed_call, 'compute_optimizer', aws.get_compute_optimizer): 'compute_optimizer',
+                    executor.submit(timed_call, 'services_resources', aws.get_services_resources): 'services_resources',
+                    executor.submit(timed_call, 'support_tickets', aws.get_support_tickets): 'support_tickets'
+                  }
+        
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error in {futures[future]}: {e}")
     
-    #3. Fetch Config Data  
-    step_start = time.time()
-    aws.get_config()
-    process_times['config'] = round(time.time() - step_start, 2)
+    process_times['application_signals']    = 0
+    process_times['marketplace']            = 0
     
-    #4. Fetch Cost Data
-    step_start = time.time()
-    aws.get_cost()
-    process_times['cost'] = round(time.time() - step_start, 2)
+    # Get all data
+    step_start                      = time.time()
+    data                            = aws.data.get_all_data()
+    process_times['get_all_data']   = round(time.time() - step_start, 2)
     
-    #5. Fetch Inventory Data
-    step_start = time.time()
-    aws.get_inventory()
-    process_times['inventory'] = round(time.time() - step_start, 2)
-    
-    #6. Fetch Security Data
-    step_start = time.time()
-    aws.get_security()
-    process_times['security'] = round(time.time() - step_start, 2)
-    
-    #7. Fetch Trusted Advisor Data
-    step_start = time.time()
-    aws.get_trusted_advisor()
-    process_times['trusted_advisor'] = round(time.time() - step_start, 2)
-    
-    #8. Fetch Application Signals Data
-    step_start = time.time()
-    #aws.get_application_signals()
-    process_times['application_signals'] = round(time.time() - step_start, 2)
-    
-    #9. Fetch Resilience Hub Application Data
-    step_start = time.time()
-    aws.get_resilience_hub_apps()
-    process_times['resilience_hub'] = round(time.time() - step_start, 2)
-    
-    #10. Fetch Health Data
-    step_start = time.time()
-    aws.get_health()
-    process_times['health'] = round(time.time() - step_start, 2)
-    
-    #11. Fetch Marketplace Data
-    step_start = time.time()
-    #aws.get_marketplace()
-    process_times['marketplace'] = round(time.time() - step_start, 2)
-    
-    #12. Fetch Compute Optimizer Data
-    step_start = time.time()
-    aws.get_compute_optimizer()
-    process_times['compute_optimizer'] = round(time.time() - step_start, 2)
-    
-    #13. Get Service Resources
-    step_start = time.time()
-    aws.get_services_resources()
-    process_times['services_resources'] = round(time.time() - step_start, 2)
-    
-    #14. Get Config Inventory
-    """ This is a placeholder for future implmentation """
-
-    #13. Get Service Resources
-    step_start = time.time()
-    aws.get_support_tickets()
-    process_times['support_tickets'] = round(time.time() - step_start, 2)
-
-    #All. Get All Data
-    step_start = time.time()
-    data = aws.data.get_all_data()
-    process_times['get_all_data'] = round(time.time() - step_start, 2)
-    
-    # Ensure data is not None before uploading
     if data is None:
-        print("Warning: No data collected, creating empty data structure")
-        data = {
-            "account": {"account_id": account},
-            "error": "No data collected",
-            "timestamp": datetime.now().isoformat()
-        }
+        data    = {
+                    "account": {"account_id": account},
+                    "error": "No data collected",
+                    "timestamp": datetime.now().isoformat()
+                  }
     
-    step_start = time.time()
-    result = upload_to_s3(data=data, account=account, end_date=end_date, interval=interval)
-    process_times['upload_to_s3'] = round(time.time() - step_start, 2)
+    step_start                      = time.time()
+    result                          = upload_to_s3(data=data, account=account, end_date=end_date, interval=interval)
+    process_times['upload_to_s3']   = round(time.time() - step_start, 2)
     
-    # Calculate total processing time
-    total_time = round(time.time() - start_time, 2)
-    process_times['total_time'] = total_time
+    total_time                      = round(time.time() - start_time, 2)
+    process_times['total_time']     = total_time
     
-    # Add processing times to result
     if isinstance(result, dict):
         result['processing_times'] = process_times
     
@@ -2546,8 +2545,8 @@ if __name__ == "__main__":
     start   = None
     end     = None
 
-    start   = "08-01-2026"  # January 07, 2026
-    end     = "09-01-2026"  # January 09, 2026
+    start   = "14-01-2026"  # January 14, 2026
+    end     = "21-01-2026"  # January 21, 2026
 
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     
