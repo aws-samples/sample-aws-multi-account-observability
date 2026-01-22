@@ -661,77 +661,30 @@ class CoreManager:
                 print(f"{ERROR} No account loaded")
                 return False
             
-            config_map      = {}  # Map config_report_id
-            non_compliant   = data.pop('non_compliant_resources', [])
-            
+            non_compliant       = data.pop('non_compliant_resources', [])
             # Load config report first (parent)
             data['account_id']  = self.curr_acct['id']
             result              = self.db.upsert('config_reports', data, ['account_id', 'date_from'], self.stats)
             
-            # Get config_report_id for resources - FIX: Add ::date casting
+            # Get config_report_id for resources
             if result in ['created', 'updated']:
                 db_config = self.db.select_one(
                     "SELECT id FROM config_reports WHERE account_id = :account_id AND date_from = :date_from::date",
                     {'account_id': self.curr_acct['id'], 'date_from': data['date_from']}
                 )
-                if db_config:
-                    config_map['config_report_id'] = db_config['id']
-            
-            # Load non-compliant resources (children)
-            if config_map:
-                config_report_id    = config_map['config_report_id']
-                new_resource_keys   = {
-                                        (resource['rule_name'], resource['resource_id'], resource['resource_type']) 
-                                        for resource in non_compliant
-                                      }
-                # Implementing Check to update teh status : Getting current resource id
-                #print("New Resources: ", new_resource_keys, "Count:", len(new_resource_keys))
                 
-                if new_resource_keys:
-                    # Build dynamic placeholders for composite key matching
-                    placeholders = ','.join([f'(:rule{i}, :res{i}, :type{i})' for i in range(len(new_resource_keys))])
-                    params = {}
-                    for i, (rule, res_id, res_type) in enumerate(new_resource_keys):
-                        params[f'rule{i}']  = rule
-                        params[f'res{i}']   = res_id
-                        params[f'type{i}']  = res_type
-                    
-                    #self.db.execute_statement( # nosec B608
-                    #    f"""UPDATE non_compliant_resources 
-                    #        SET status = 'RESOLVED', compliance_type = 'COMPLIANT'
-                    #        WHERE config_report_id IN (
-                    #            SELECT id FROM config_reports WHERE account_id = :account_id
-                    #        ) 
-                    #        AND (rule_name, resource_id, resource_type) NOT IN ({placeholders})""",
-                    #    {**params, 'account_id': self.curr_acct['id']}
-                    #) # nosec B608
-
-                    self.db.execute_statement(f"UPDATE non_compliant_resources SET status = 'RESOLVED', compliance_type = 'COMPLIANT' WHERE config_report_id IN (SELECT id FROM config_reports WHERE account_id = :account_id) AND (rule_name, resource_id, resource_type) NOT IN ({placeholders})", {**params, 'account_id': self.curr_acct['id']})  # nosec B608
-
-                else:
-                    # Empty array = all previous resources are now compliant
-                    self.db.execute_statement(
-                        """UPDATE non_compliant_resources 
-                        SET status = 'RESOLVED', compliance_type = 'COMPLIANT'
-                        WHERE config_report_id IN (
-                            SELECT id FROM config_reports WHERE account_id = :account_id
-                        )""",
-                        {'account_id': self.curr_acct['id']}
-                    )
-
-                for resource in non_compliant:
-                    resource['created_at']          = resource.pop('config_rule_invoked_time', None)
-                    resource['config_report_id']    = config_report_id
-                    resource['status']              = 'OPEN'
-
-                    self.db.upsert('non_compliant_resources', resource, ['config_report_id', 'resource_id', 'rule_name', 'rule_type'], self.stats)
+                # Load non-compliant resources (children)
+                if db_config and non_compliant:
+                    for resource in non_compliant:
+                        resource['created_at']          = resource.pop('config_rule_invoked_time', None)
+                        resource['config_report_id']    = db_config['id']
+                        self.db.upsert('non_compliant_resources', resource, ['config_report_id', 'resource_id', 'rule_name'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.CONFIG)
             return True
         except Exception as e:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.CONFIG, msg=e)
             print(f"{ERROR} Config load error: {e}")
-            
             return False
     #Method: UPSERT
     def load_service_data(self, data: List[Dict]) -> bool:
@@ -1443,9 +1396,9 @@ class CoreManager:
                 try:
                     future.result()
                 except Exception as e:
+                    #print(f"{ERROR} Error loading {attr}: {e}")
                     print(f"{ERROR}: {e}")
                     continue
-                    
         
         self.stats['LOADED'] += 1
         return self.stats
