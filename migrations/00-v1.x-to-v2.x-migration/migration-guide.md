@@ -138,7 +138,9 @@ ADD CONSTRAINT services_account_id_service_usage_types_date_from_key
 UNIQUE (account_id, service, usage_types, date_from);
 ```
 
-### Step 5. Add missing columns to non_compliant_resources
+### Step 5. Add missing columns to non_compliant_resources & config_reports
+
+### Step 5.1 Add missing columns on non_compliant_resources
 
 ```
 ALTER TABLE non_compliant_resources
@@ -147,6 +149,14 @@ ADD COLUMN IF NOT EXISTS evaluation_mode TEXT,
 ADD COLUMN IF NOT EXISTS conformance_pack TEXT,
 ADD COLUMN IF NOT EXISTS status VARCHAR(255) DEFAULT 'OPEN',
 ADD COLUMN IF NOT EXISTS config_rule_invoked_time TIMESTAMP WITH TIME ZONE;
+```
+
+### Step 5.2 Add missing columns to config_reports
+
+```
+ALTER TABLE config_reports
+ADD COLUMN IF NOT EXISTS curr_non_compliant INTEGER  DEFAULT 0,
+ADD COLUMN IF NOT EXISTS curr_compliant INTEGER  DEFAULT 0;
 ```
 
 ### Step 6. Add missing columns to inventory_instances
