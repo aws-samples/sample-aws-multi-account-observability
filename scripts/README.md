@@ -281,3 +281,147 @@ v1.x refers to the original version which lacked:
 - Support ticket tracking
 - Enhanced compliance features
 - EC2 receiver option
+
+## Helper Function
+
+### Get Config Data
+
+- If you would like to get the status of all `COMPLIANT` & `NON_COMPLIANT` resources on a daily basis, In the `sender.py` Replace the  `get_config` with the below function.
+- The reason why we did not use this is because, for a very active account on a daily basis it takes all the resources which can be very data intensive, hence we only take what happened on the day the script runs. We need to take the compliant reosurces as well, so the database gets updated.
+
+
+```
+def get_config(self):
+    try:
+        if not self.get_date():
+            return None
+        
+        config_client = boto3.client('config', region_name=REGION)
+        
+        # Step 0: Convert dates to compare
+        if not self.start_date or not self.end_date:
+            return None
+        
+        # Use start_date for both start and end to get single day range
+        start_datetime  = datetime.combine(self.start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end_datetime    = datetime.combine(self.start_date, datetime.min.time()).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+
+        # Step 1: Build Conformance Mapping
+        rule_to_pack_mapping    = {}
+        try:
+            for pack in config_client.describe_conformance_packs()['ConformancePackDetails']:
+                pack_name = pack['ConformancePackName']
+                
+                try:
+                    pack_compliance = config_client.describe_conformance_pack_compliance(
+                        ConformancePackName=pack_name
+                    )
+                    
+                    for rule_compliance in pack_compliance['ConformancePackRuleComplianceList']:
+                        if rule_name := rule_compliance.get('ConfigRuleName'):
+                            rule_to_pack_mapping[rule_name] = pack_name
+                            
+                except Exception as e:
+                    self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Conformance Pack: " + str(e)})
+                    pass
+                    
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Conformance Pack: " + str(e)})
+            pass
+
+        # Step 2: Get all compliance data
+        compliant_count         = 0
+        non_compliant_count     = 0
+        non_compliant_resources = []
+        curr_non_compliant      = 0 # Non-Compliant rules on the date this script is run
+        curr_compliant          = 0 # Compliant rules on the date this script is run
+
+        paginator = config_client.get_paginator('describe_compliance_by_config_rule')
+        
+        for page in paginator.paginate(ComplianceTypes=['COMPLIANT', 'NON_COMPLIANT']):
+            for rule in page.get('ComplianceByConfigRules', []):
+                compliance_type = rule.get('Compliance', {}).get('ComplianceType')
+                
+                if compliance_type in ('COMPLIANT', 'NON_COMPLIANT'):
+
+                    if compliance_type == 'COMPLIANT':
+                        compliant_count += 1
+                    elif compliance_type == 'NON_COMPLIANT':
+                        non_compliant_count += 1
+
+                    rule_name           = rule['ConfigRuleName']
+                    conformance_pack    = rule_to_pack_mapping.get(rule_name, 'Standalone')
+                    has_matching_result = False
+
+                    try:
+                        details = config_client.get_compliance_details_by_config_rule(
+                            ConfigRuleName=rule_name,
+                            ComplianceTypes=[compliance_type],
+                            Limit=50
+                        )
+
+                        for eval_result in details['EvaluationResults']:
+                            #config_rule_invoked_time = eval_result.get('ConfigRuleInvokedTime')
+                            result_time = eval_result.get('ResultRecordedTime')
+
+                            # Convert result_time to UTC for comparison
+                            if result_time:
+                                result_time_utc = result_time.astimezone(timezone.utc)
+                                
+                                #if start_datetime <= result_time_utc <= end_datetime:
+                                has_matching_result = True
+                                qualifier   = eval_result['EvaluationResultIdentifier']['EvaluationResultQualifier']
+                                non_compliant_resources.append({
+                                                                'rule_name'                 : rule_name,
+                                                                'resource_id'               : qualifier.get('ResourceId'),
+                                                                'resource_type'             : qualifier.get('ResourceType'),
+                                                                'config_rule_invoked_time'  : result_time,
+                                                                'conformance_pack'          : conformance_pack,
+                                                                'compliance_type'           : eval_result.get('ComplianceType'),
+                                                                'annotation'                : eval_result.get('Annotation'),
+                                                                'evaluation_mode'           : qualifier.get('EvaluationMode')
+                                                                })
+                        if has_matching_result:
+                            
+                            if compliance_type == 'COMPLIANT':
+                                curr_compliant += 1 # Compliant rules on the date this script is run
+                            elif compliance_type == 'NON_COMPLIANT':
+                                curr_non_compliant += 1 # Non-Compliant rules on the date this script is run
+                                
+                    except Exception as e:
+                        self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': "Compliance rules: "+str(e)})
+
+
+                
+                    rule_name           = rule['ConfigRuleName']
+                    conformance_pack    = rule_to_pack_mapping.get(rule_name, 'Standalone')
+                    has_matching_result = False
+                    
+                    
+
+        # Step 3: Calculate totals and score
+        
+        total_rules     = compliant_count + non_compliant_count
+        compliance_score= round((compliant_count / max(total_rules, 1)) * 100, 2) if total_rules > 0 else 0
+        config_data     = {
+                            'date_from'                 : self.start_date.strftime('%Y-%m-%d') if self.start_date else '',
+                            'date_to'                   : self.end_date.strftime('%Y-%m-%d') if self.end_date else '',
+                            'compliance_score'          : compliance_score,
+                            'total_rules'               : total_rules,
+                            'compliant_rules'           : compliant_count,
+                            'non_compliant_rules'       : non_compliant_count,
+                            'curr_non_compliant'        : curr_non_compliant,
+                            'curr_compliant'            : curr_compliant,
+                            'non_compliant_resources'   : non_compliant_resources
+                            }
+        print({'curr_non_compliant': curr_non_compliant,'curr_compliant': curr_compliant,})
+        
+        self.data.set_data(attr=AWSResourceType.CONFIG, data=config_data)
+        self.set_log(def_type=AWSResourceType.CONFIG)
+
+        return config_data
+        
+    except Exception as e:
+        self.set_log(def_type=AWSResourceType.CONFIG, status="Fail", value={'config': str(e)})
+        return None
+```
