@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv()
- """
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -614,7 +614,14 @@ class AWSResourceManager:
                 Granularity =   self.interval,
                 Metrics     =   ['UnblendedCost'], #REMOVED ['BlendedCost', 'NetUnblendedCost', 'AmortizedCost', 'UsageQuantity'] # NOT USED
                 GroupBy     =   [{'Type': 'DIMENSION', 'Key': 'SERVICE'}], #REMOVED {'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'} #this gives too much data
-                Filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+                #Filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+                Filter      =   {
+                                    'And': [
+                                        {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}},
+                                        {'Dimensions': {'Key': 'REGION', 'Values': [self.region]}}
+                                    ]
+                                }
+
             ))
 
             result_data = []
