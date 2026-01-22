@@ -73,3 +73,47 @@ AND (
   (p.name = 'Data Analytics Suite' AND a.account_id IN ('345678901234', '456789012345')) 
 );
 ```
+
+## 3. TRUNCATE all records in the database
+
+```
+-- Truncate all tables with CASCADE
+TRUNCATE TABLE 
+    accounts,
+    contact_info,
+    alternate_contacts,
+    services,
+    cost_reports,
+    service_costs,
+    cost_forecasts,
+    security,
+    findings,
+    products,
+    product_accounts,
+    logs,
+    log_messages,
+    config_reports,
+    non_compliant_resources,
+    service_resources,
+    compute_optimizer,
+    config_inventory,
+    guard_duty_findings,
+    kms_keys,
+    waf_rules,
+    waf_rules_detailed,
+    cloudtrail_logs,
+    secrets_manager_secrets,
+    certificates,
+    inspector_findings,
+    inventory_instances,
+    inventory_applications,
+    inventory_patches,
+    marketplace_usage,
+    trusted_advisor_checks,
+    health_events,
+    application_signals,
+    resilience_hub_apps,
+    support_tickets
+RESTART IDENTITY CASCADE;
+
+```

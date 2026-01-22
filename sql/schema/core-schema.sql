@@ -53,9 +53,6 @@ CREATE TABLE alternate_contacts (
     UNIQUE(account_id, contact_type)
 );
 
-
-
-
 /* Services Table Schema */
 -- Create the services table
 CREATE TABLE services (
@@ -231,6 +228,8 @@ CREATE TABLE config_reports (
     compliance_score NUMERIC(5,2),
     total_rules INTEGER,
     compliant_rules INTEGER,
+    curr_non_compliant INTEGER  DEFAULT 0,
+    curr_compliant INTEGER  DEFAULT 0,
     non_compliant_rules INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (account_id, date_from)
