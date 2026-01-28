@@ -629,6 +629,7 @@ Resources:
               - config:DescribeConformancePacks
               - config:DescribeConformancePackStatus
               - config:GetConformancePackComplianceDetails
+              - config:DescribeConformancePackCompliance
             Resource: "*"
           - Sid: SecurityHubAccess
             Effect: Allow
