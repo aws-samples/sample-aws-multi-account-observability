@@ -17,12 +17,14 @@
     *   [Step 2: Update contact_info foreign key reference](#step-2-update-contact_info-foreign-key-reference)
     *   [Step 3: Update alternate_contacts foreign key reference](#step-3-update-alternate_contacts-foreign-key-reference)
     *   [Step 4: Update services table constraint](#step-4-update-services-table-constraint)
-    *   [Step 5: Add missing columns to non_compliant_resources](#step-5-add-missing-columns-to-non_compliant_resources)
+    *   [Step 5: Add missing columns to non_compliant_resources & config_reports](#step-5-add-missing-columns-to-non_compliant_resources--config_reports)
     *   [Step 6: Add missing columns to inventory_instances](#step-6-add-missing-columns-to-inventory_instances)
     *   [Step 7: Create support_tickets table](#step-7-create-support_tickets-table-if-not-exists)
-    *   [Step 8: Create missing indexes](#step-8-create-missing-indexes)
+    *   [Step 8: Create missing indexes for support_tickets](#step-8-create-missing-indexes-for-support_tickets)
+    *   [Step 9: Create ri_sp_daily_savings table](#step-9-create-ri_sp_daily_savings-table-if-not-exists)
+    *   [Step 10: Create missing indexes for the ri_sp_daily_savings](#step-10-create-missing-indexes-for-the-ri_sp_daily_savings-table)
 *   [2. Migrate the Views](#2-migrate-the-views)
-    *   [Step 1: Drop all old views](#step-1-drop-all-the-old-views)
+    *   [Step 1: Drop all old views](#step-1-drop-all-old-views)
     *   [Step 2: Re-Create the views](#step-2-re-create-the-views)
 *   [3. Update Lambda Scripts](#3-update-lambda-scripts)
     *   [Step 1: Replace sender.py](#step-1-replace-senderpy)
@@ -197,7 +199,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
 ```
 
 
-### Step 8. Create missing indexes
+### Step 8. Create missing indexes for the support_tickets
 
 ```
 CREATE INDEX IF NOT EXISTS idx_support_tickets_account_time ON support_tickets(account_id, time_created);
@@ -205,6 +207,39 @@ CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status)
 CREATE INDEX IF NOT EXISTS idx_support_tickets_severity ON support_tickets(severity_code);
 ```
 
+### Step 9. Create ri_sp_daily_savings table if not exists
+
+```
+CREATE TABLE IF NOT EXISTS ri_sp_daily_savings (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    reservation_type VARCHAR(50) NOT NULL,
+    subscription_id VARCHAR(255) NOT NULL,
+    service VARCHAR(100),
+    instance_type VARCHAR(100),
+    instance_count INTEGER,
+    utilization_percentage NUMERIC(5,2),
+    on_demand_cost NUMERIC(12,2),
+    reservation_cost NUMERIC(12,2),
+    net_savings NUMERIC(12,2),
+    date_from TIMESTAMP WITH TIME ZONE,
+    date_to TIMESTAMP WITH TIME ZONE,
+    offering_type VARCHAR(50),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ri_sp_daily_savings_unique UNIQUE (account_id, subscription_id, date)
+);
+```
+
+### Step 10. Create missing indexes for the ri_sp_daily_savings table
+
+```
+CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_account_date ON ri_sp_daily_savings(account_id, date);
+CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_subscription ON ri_sp_daily_savings(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_type ON ri_sp_daily_savings(reservation_type);
+CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_service ON ri_sp_daily_savings(service);
+```
 ## 2. Migrate the Views
 
 ### Step 1. Drop all the old views
@@ -252,6 +287,8 @@ DROP VIEW IF EXISTS view_acct_serv;
 DROP VIEW IF EXISTS view_alternate_contacts;
 DROP VIEW IF EXISTS view_contact_info;
 DROP VIEW IF EXISTS view_accounts;
+DROP VIEW IF EXISTS view_support_tickets;
+DROP VIEW IF EXISTS view_ri_sp_daily_savings;
 ```
 
 ### Step 2. Re-Create the Views

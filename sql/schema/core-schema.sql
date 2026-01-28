@@ -53,6 +53,9 @@ CREATE TABLE alternate_contacts (
     UNIQUE(account_id, contact_type)
 );
 
+
+
+
 /* Services Table Schema */
 -- Create the services table
 CREATE TABLE services (
@@ -228,9 +231,9 @@ CREATE TABLE config_reports (
     compliance_score NUMERIC(5,2),
     total_rules INTEGER,
     compliant_rules INTEGER,
+    non_compliant_rules INTEGER,
     curr_non_compliant INTEGER  DEFAULT 0,
     curr_compliant INTEGER  DEFAULT 0,
-    non_compliant_rules INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (account_id, date_from)
 );
@@ -631,6 +634,27 @@ CREATE TABLE support_tickets (
     CONSTRAINT date_check CHECK (date_to >= date_from)
 );
 
+CREATE TABLE ri_sp_daily_savings (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    reservation_type VARCHAR(50) NOT NULL,
+    subscription_id VARCHAR(255) NOT NULL,
+    service VARCHAR(100),
+    instance_type VARCHAR(100),
+    instance_count INTEGER,
+    utilization_percentage NUMERIC(5,2),
+    on_demand_cost NUMERIC(12,2),
+    reservation_cost NUMERIC(12,2),
+    net_savings NUMERIC(12,2),
+    date_from TIMESTAMP WITH TIME ZONE,
+    date_to TIMESTAMP WITH TIME ZONE,
+    offering_type VARCHAR(50),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ri_sp_daily_savings_unique UNIQUE (account_id, subscription_id, date)
+);
+
 /* Set Indexes */
 
 -- Create indexes for better query performance
@@ -691,3 +715,9 @@ CREATE INDEX idx_resilience_hub_apps_account_id ON resilience_hub_apps(account_i
 CREATE INDEX idx_support_tickets_account_time ON support_tickets(account_id, time_created);
 CREATE INDEX idx_support_tickets_status ON support_tickets(status);
 CREATE INDEX idx_support_tickets_severity ON support_tickets(severity_code);
+
+-- Create index for Reserved Instances and Savings Plans
+CREATE INDEX idx_ri_sp_savings_account_date ON ri_sp_daily_savings(account_id, date);
+CREATE INDEX idx_ri_sp_savings_subscription ON ri_sp_daily_savings(subscription_id);
+CREATE INDEX idx_ri_sp_savings_type ON ri_sp_daily_savings(reservation_type);
+CREATE INDEX idx_ri_sp_savings_service ON ri_sp_daily_savings(service);

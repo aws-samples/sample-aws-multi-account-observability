@@ -15,7 +15,6 @@ DROP VIEW IF EXISTS view_resilience_hub_apps;
 DROP VIEW IF EXISTS view_products;
 DROP VIEW IF EXISTS view_product_summary;
 DROP VIEW IF EXISTS view_product_acct;
-DROP VIEW IF EXISTS view_non_compliant_resources;
 DROP VIEW IF EXISTS view_marketplace_usage;
 DROP VIEW IF EXISTS view_kms_keys;
 DROP VIEW IF EXISTS view_inventory_patches;
@@ -26,6 +25,7 @@ DROP VIEW IF EXISTS view_health_events;
 DROP VIEW IF EXISTS view_guard_duty_findings;
 DROP VIEW IF EXISTS view_contact_info;
 DROP VIEW IF EXISTS view_config_reports;
+DROP VIEW IF EXISTS view_non_compliant_resources;
 DROP VIEW IF EXISTS view_config_inventory_summary;
 DROP VIEW IF EXISTS view_config_inventory_account_summary;
 DROP VIEW IF EXISTS view_config_inventory;
@@ -47,6 +47,7 @@ DROP VIEW IF EXISTS view_acct_cost_rep_forecast;
 DROP VIEW IF EXISTS view_acct_cost_rep;
 DROP VIEW IF EXISTS view_accounts;
 DROP VIEW IF EXISTS view_support_tickets;
+DROP VIEW IF EXISTS view_ri_sp_daily_savings;
 ```
 
 ## 2. Managing products via Query editor
@@ -113,7 +114,8 @@ TRUNCATE TABLE
     health_events,
     application_signals,
     resilience_hub_apps,
-    support_tickets
+    support_tickets,
+    ri_sp_daily_savings
 RESTART IDENTITY CASCADE;
 
 ```

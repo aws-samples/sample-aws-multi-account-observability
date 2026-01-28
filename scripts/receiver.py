@@ -63,8 +63,11 @@ AWS_TYPECAST_2  =   {
                                                             'first_observed_at',
                                                             'last_changed_date',
                                                             'association_execution_date',
-                                                            'association_success_date'
-
+                                                            'association_success_date',
+                                                            'start_date',
+                                                            'end_date',
+                                                            'date',
+                                                            'time_created'
                                                         ],
                         'period_granularity_type'   :   [
                                                             'period_granularity'
@@ -82,7 +85,12 @@ AWS_TYPECAST_2  =   {
                                                             'potential_monthly_savings',
                                                             'amount',
                                                             'prediction_interval_lower_bound',
-                                                            'prediction_interval_upper_bound'
+                                                            'prediction_interval_upper_bound',
+                                                            'utilization_percentage',
+                                                            'on_demand_cost',
+                                                            'reservation_cost',
+                                                            'net_savings',
+                                                            'instance_count'
                                                         ],
                         'jsonb'                     :   [
                                                             'key_attributes',
@@ -224,7 +232,8 @@ class AWSResourceType(str, Enum):
     HEALTH              = "Health"
     APPLICATION         = "Application"
     RESILIENCE_HUB      = "Resilience Hub"
-    COMPUTE_OPTIMIZER   = "Compute Optimnizer"
+    COMPUTE_OPTIMIZER   = "Compute Optimizer"
+    RI_SP_SAVINGS       = "RI/SP Savings"
     SERVICE_RESOURCES   = "Service Resources"
     CONFIG_INVENTORY    = "Config Inventory"
     SUPPORT_TICKETS     = "Support Tickets"
@@ -661,7 +670,7 @@ class CoreManager:
                 print(f"{ERROR} No account loaded")
                 return False
             
-            non_compliant       = data.pop('non_compliant_resources', [])
+            non_compliant   = data.pop('non_compliant_resources', [])
             # Load config report first (parent)
             data['account_id']  = self.curr_acct['id']
             result              = self.db.upsert('config_reports', data, ['account_id', 'date_from'], self.stats)
@@ -1256,14 +1265,11 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.CONFIG_INVENTORY, msg=e)
             return False
     #Method: UPSERT
-    def load_support_tickets_data(self, data: Dict) -> bool:
+    def load_support_tickets_data(self, data: List[Dict]) -> bool:
         """Load support tickets data with blazing fast upsert"""
         try:
-            if not isinstance(data, dict) or not self.curr_acct:
+            if not isinstance(data, list) or not self.curr_acct:
                 return False
-                
-            # Extract tickets array from the data structure
-            tickets = data.get('support_tickets', [])
             
             # Define schema fields to filter JSON data
             ticket_fields = {
@@ -1272,23 +1278,42 @@ class CoreManager:
                 'submitted_by', 'language', 'date_from', 'date_to'
             }
             
-            if isinstance(tickets, list):
-                for ticket in tickets:
-                    # Filter to only schema fields
-                    filtered_ticket = {k: v for k, v in ticket.items() if k in ticket_fields}
-                    filtered_ticket['account_id'] = self.curr_acct['id']
-                    
-                    # Add date_from and date_to from parent data
-                    filtered_ticket['date_from'] = data.get('date_from')
-                    filtered_ticket['date_to'] = data.get('date_to')
-                    
-                    # Upsert using unique key (case_id is unique)
-                    self.db.upsert('support_tickets', filtered_ticket, 'case_id', self.stats)
+            for ticket in data:
+                # Filter to only schema fields
+                filtered_ticket = {k: v for k, v in ticket.items() if k in ticket_fields}
+                filtered_ticket['account_id'] = self.curr_acct['id']
+                
+                # Upsert using unique key (case_id is unique)
+                self.db.upsert('support_tickets', filtered_ticket, 'case_id', self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SUPPORT_TICKETS)
             return True
         except Exception as e:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.SUPPORT_TICKETS, msg=e)
+            return False
+
+    #Method: UPSERT
+    def load_ri_sp_savings_data(self, data: List[Dict]) -> bool:
+        """Load RI/SP daily savings data with blazing fast upsert"""
+        try:
+            ri_sp_fields = {
+                'account_id', 'date', 'reservation_type', 'subscription_id', 'service',
+                'instance_type', 'instance_count', 'utilization_percentage', 'on_demand_cost',
+                'reservation_cost', 'net_savings', 'date_from', 'date_to', 'offering_type'  # Changed field names
+            }
+            
+            if isinstance(data, list) and self.curr_acct is not None:
+                for record in data:
+                    filtered_record = {k: v for k, v in record.items() if k in ri_sp_fields}
+                    filtered_record['account_id'] = self.curr_acct['id']
+                    
+                    self.db.upsert('ri_sp_daily_savings', filtered_record, 
+                                  ['account_id', 'subscription_id', 'date'], self.stats)
+
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.RI_SP_SAVINGS)
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.RI_SP_SAVINGS, msg=e)
             return False
     #Method: UPSERT
     def load_logs_data(self, data: Dict) -> bool:
@@ -1382,12 +1407,13 @@ class CoreManager:
             'resilience_hub'    : self.load_resilience_hub_data,
             'service_resources' : self.load_service_resources_data,
             'compute_optimizer' : self.load_compute_optimizer_data,
+            'ri_sp_savings'     : self.load_ri_sp_savings_data,
             'config_inventory'  : self.load_config_inventory_data,
             'support_tickets'   : self.load_support_tickets_data,
             'logs'              : self.load_logs_data
         }
         
-        with ThreadPoolExecutor(max_workers=14) as executor:
+        with ThreadPoolExecutor(max_workers=15) as executor:
             futures = {executor.submit(loader, data[attr]): attr 
                        for attr, loader in loaders.items() if data.get(attr)}
             
@@ -1476,7 +1502,7 @@ def load_data():
 def testing():
     load_time_start = time.time()
     core_db         = CoreManager()
-    data_file = "examples/data.json"
+    data_file       = "examples/data.json"
 
     try:
         step_start = time.time()

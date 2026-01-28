@@ -176,7 +176,7 @@ Resources:
               - config:DescribeComplianceByConfigRule
               - config:DescribeConformancePacks
               - config:DescribeConformancePackStatus
-              - config:GetConformancePackComplianceDetails
+              - config:GetConformancePackComplianceDetails,
               - config:DescribeConformancePackCompliance
             Resource: "*"
           - Sid: SecurityHubAccess
@@ -351,6 +351,32 @@ Resources:
               - compute-optimizer:GetEBSVolumeRecommendations
               - compute-optimizer:GetLambdaFunctionRecommendations
             Resource: "*"
+          - Sid: ReservationAccess
+            Effect: Allow
+            Action:
+              - ce:GetReservationUtilization
+              - ce:GetReservationCoverage
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetSavingsPlansCoverage
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansPurchaseRecommendation
+            Resource: "*"
+          - Sid: EC2ReservationAccess
+            Effect: Allow
+            Action:
+              - ec2:DescribeReservedInstances
+            Resource: "*"
+          - Sid: RDSReservationAccess
+            Effect: Allow
+            Action:
+              - rds:DescribeReservedDBInstances
+            Resource: "*"
+          - Sid: SavingsPlansAccess
+            Effect: Allow
+            Action:
+              - savingsplans:DescribeSavingsPlans
+            Resource: "*"
+
           - Sid: LogsAccess
             Effect: Allow
             Action:
@@ -364,7 +390,63 @@ Resources:
             Action:
               - sqs:SendMessage
             Resource: !GetAtt A360DLQ.Arn
-
+  
+  A360SenderCostPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Cost Explorer APIs don't support resource-level permissions"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "Cost Explorer APIs require wildcard"
+    Properties:
+      Description: Cost and Reservation policy for A360 Sender
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CostExplorerAccess
+            Effect: Allow
+            Action:
+              - ce:GetCostAndUsage
+              - ce:GetCostForecast
+              - ce:GetAnomalies
+              - ce:GetAnomalyMonitors
+              - ce:GetCostCategories
+              - ce:GetDimensionValues
+              - ce:GetPreferences
+              - ce:GetReservationUtilization
+              - ce:GetReservationCoverage
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetSavingsPlansCoverage
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansPurchaseRecommendation
+            Resource: "*"
+          - Sid: EC2ReservationAccess
+            Effect: Allow
+            Action:
+              - ec2:DescribeReservedInstances
+            Resource: "*"
+          - Sid: RDSReservationAccess
+            Effect: Allow
+            Action:
+              - rds:DescribeReservedDBInstances
+            Resource: "*"
+          - Sid: SavingsPlansAccess
+            Effect: Allow
+            Action:
+              - savingsplans:DescribeSavingsPlans
+            Resource: "*"
+          - Sid: ComputeOptimizerAccess
+            Effect: Allow
+            Action:
+              - compute-optimizer:GetEC2InstanceRecommendations
+              - compute-optimizer:GetEBSVolumeRecommendations
+              - compute-optimizer:GetLambdaFunctionRecommendations
+            Resource: "*"
+ 
   A360LambdaSenderRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -379,6 +461,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !Ref A360SenderPolicy
+        - !Ref A360SenderCostPolicy
 
   LambdaKMSKey:
     Type: 'AWS::KMS::Key'

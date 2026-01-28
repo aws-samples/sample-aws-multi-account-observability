@@ -111,6 +111,7 @@ class AWSResourceData:
     application		    : List[Dict[str, Any]]  = field(default_factory=list)
     resilience_hub	    : List[Dict[str, Any]]  = field(default_factory=list)
     compute_optimizer	: List[Dict[str, Any]]  = field(default_factory=list)
+    ri_sp_savings       : List[Dict[str, Any]]  = field(default_factory=list)
     service_resources	: List[Dict[str, Any]]  = field(default_factory=list)
     config_inventory	: List[Dict[str, Any]]  = field(default_factory=list)
     support_tickets	    : List[Dict[str, Any]]  = field(default_factory=list)
@@ -129,6 +130,7 @@ class AWSResourceType(str, Enum):
     APPLICATION         = "application"
     RESILIENCE_HUB      = "resilience_hub"
     COMPUTE_OPTIMIZER   = "compute_optimizer"
+    RI_SP_SAVINGS       = "ri_sp_savings"
     CONFIG_INVENTORY    = "config_inventory"
     SERVICE_RESOURCES   = "service_resources"
     SUPPORT_TICKETS     = "support_tickets"
@@ -162,6 +164,7 @@ class AWSResourceInterface:
             "resilience_hub"	: self.data.resilience_hub,
             "service_resources"	: self.data.service_resources,
             "compute_optimizer"	: self.data.compute_optimizer,
+            "ri_sp_savings"	    : self.data.ri_sp_savings,
             "config_inventory"	: self.data.config_inventory,
             "support_tickets"	: self.data.support_tickets,
             "logs"				: self.data.logs
@@ -358,6 +361,29 @@ class AWSBoto3Permissions:
                 "status": False,
                 "reqd"  : False
             },
+            "savingsplans": {
+                "name": "Savings Plans",
+                "client": boto3.client("savingsplans", region_name=REGION, config=self.boto3_config),
+                "action": "describe_savings_plans",
+                "params": params,
+                "status": False,
+                "reqd": False
+            },
+            
+            "ce-ri": {
+                "name": "Cost Explorer - RI Utilization",
+                "client": boto3.client("ce", region_name=REGION, config=self.boto3_config),
+                "action": "get_reservation_utilization",
+                "params": {
+                    "TimePeriod": {
+                        "Start" : self.start_date.strftime("%Y-%m-%d"),
+                        "End"   : self.end_date.strftime("%Y-%m-%d"),
+                    },
+                    "Granularity": "DAILY"
+                },
+                "status": False,
+                "reqd": False
+            },
             "support": {
                 "name": "Trusted Advisor & Support Tickets",
                 "client": boto3.client("support", region_name="us-east-1", config=self.boto3_config),
@@ -460,6 +486,7 @@ class AWSResourceManager:
                                 "application_status" 	    : "Pass",	
                                 "resilience_hub_status"     : "Pass",
                                 "compute_optimizer_status"  : "Pass",
+                                "ri_sp_savings_status"      : "Pass",
                                 "service_resources_status"  : "Pass",
                                 "config_inventory_status"   : "Pass",
                                 "support_tickets_status"    : "Pass",
@@ -2262,7 +2289,9 @@ class AWSResourceManager:
                             'category_code': case.get('categoryCode'),
                             'time_created': time_created,
                             'submitted_by': case.get('submittedBy'),
-                            'language': case.get('language', 'en')
+                            'language': case.get('language', 'en'),
+                            'date_from': self.start_date.strftime('%Y-%m-%d') if self.start_date else '',
+                            'date_to': self.end_date.strftime('%Y-%m-%d') if self.end_date else ''
                         })
             
             support_data = {
@@ -2272,13 +2301,192 @@ class AWSResourceManager:
                 'tickets': tickets
             }
             
-            self.data.set_data(attr=AWSResourceType.SUPPORT_TICKETS, data=support_data)
+            self.data.set_data(attr=AWSResourceType.SUPPORT_TICKETS, data=tickets)
             self.set_log(def_type=AWSResourceType.SUPPORT_TICKETS)
-            return support_data
+            return tickets
             
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SUPPORT_TICKETS, status="Fail", value={'support_tickets': str(e)})
             return None
+    
+    #16. Fetching RI/SP Daily Savings
+    def get_ri_sp_savings(self):
+        try:
+            ce_client       = boto3.client('ce', region_name=REGION)
+            daily_savings   = []
+            
+            start_date_aware, end_date_aware    = self._get_timezone_aware_dates()
+            start_str                           = start_date_aware.strftime('%Y-%m-%d') if start_date_aware else ''
+            end_str                             = end_date_aware.strftime('%Y-%m-%d') if end_date_aware else ''
+            
+            # Helper functions for parallel execution
+            def get_ec2_ris():
+                ri_details = {}
+                try:
+                    ec2     = boto3.client('ec2', region_name=REGION)
+                    ec2_ris = ec2.describe_reserved_instances(Filters=[{'Name': 'state', 'Values': ['active']}])
+                    for ri in ec2_ris.get('ReservedInstances', []):
+                        ri_details[ri.get('ReservedInstancesId')] = {
+                                                                        'service'       : 'Amazon EC2',
+                                                                        'instance_type' : ri.get('InstanceType'),
+                                                                        'instance_count': ri.get('InstanceCount'),
+                                                                        'date_from'     : ri.get('Start'),
+                                                                        'date_to'       : ri.get('End'),
+                                                                        'offering_type' : ri.get('OfferingType')
+                                                                    }
+                except Exception as e:
+                    self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': f'Error getting EC2 RIs - {str(e)}'})
+                    print(f"Error getting EC2 RIs: {str(e)}")
+                return ri_details
+            
+            def get_rds_ris():
+                ri_details = {}
+                try:
+                    rds     = boto3.client('rds', region_name=REGION)
+                    rds_ris = rds.describe_reserved_db_instances()
+                    for ri in rds_ris.get('ReservedDBInstances', []):
+                        ri_details[ri.get('ReservedDBInstanceId')] ={
+                                                                        'service'       : 'Amazon RDS',
+                                                                        'instance_type' : ri.get('DBInstanceClass'),
+                                                                        'instance_count': ri.get('DBInstanceCount'),
+                                                                        'date_from'     : ri.get('StartTime'),
+                                                                        'offering_type' : ri.get('OfferingType')
+                                                                    }
+                except Exception as e:
+                    self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': f'Error getting RDS RIs - {str(e)}'})
+                    print(f"Error getting RDS RIs: {str(e)}")
+                return ri_details
+            
+            def get_savings_plans():
+                sp_details = {}
+                try:
+                    savingsplans    = boto3.client('savingsplans', region_name=REGION)
+                    sps             = savingsplans.describe_savings_plans()
+                    for sp in sps.get('savingsPlans', []):
+                        sp_id               = sp.get('savingsPlanId')
+                        sp_details[sp_id]   = {
+                                                'savings_plan_type' : sp.get('savingsPlanType'),
+                                                'date_from'         : sp.get('start'),
+                                                'date_to'           : sp.get('end')
+                                              }
+                except Exception as e:
+                    self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': f'Error getting Savings Plans - {str(e)}'})
+                    print(f"Error getting Savings Plans: {str(e)}")
+                return sp_details
+            
+            def get_ri_utilization(subscription_id, details):
+                results = []
+                try:
+                    ri_util = ce_client.get_reservation_utilization(
+                        TimePeriod  = {'Start': start_str, 'End': end_str},
+                        Granularity = 'DAILY',
+                        Filter      = {'Dimensions': {'Key': 'SUBSCRIPTION_ID', 'Values': [subscription_id]}}
+                    )
+                    
+                    for time_period in ri_util.get('UtilizationsByTime', []):
+                        util = time_period.get('Total', {})
+                        if float(util.get('UtilizationPercentage', '0')) > 0:
+                            results.append({
+                                            'date'                  : time_period.get('TimePeriod', {}).get('Start'),
+                                            'reservation_type'      : 'Reserved Instance',
+                                            'subscription_id'       : subscription_id,
+                                            'service'               : details.get('service'),
+                                            'instance_type'         : details.get('instance_type'),
+                                            'instance_count'        : details.get('instance_count'),
+                                            'utilization_percentage': round(float(util.get('UtilizationPercentage', '0')), 2),
+                                            'on_demand_cost'        : round(float(util.get('OnDemandCostOfRIHoursUsed', '0')), 2),
+                                            'reservation_cost'      : round(float(util.get('TotalAmortizedFee', '0')), 2),
+                                            'net_savings'           : round(float(util.get('NetRISavings', '0')), 2),
+                                            'date_from'             : details.get('date_from'),
+                                            'date_to'               : details.get('date_to'),
+                                            'offering_type'         : details.get('offering_type')
+                                        })
+                except Exception as e:
+                    if 'DataUnavailableException' not in str(e):
+                        self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error getting RI util for {subscription_id} - {str(e)}'})
+                        print(f"Error getting RI util for {subscription_id}: {str(e)}")
+                return results
+            
+            def get_sp_utilization(sp_id, details):
+                results = []
+                try:
+                    sp_util = ce_client.get_savings_plans_utilization(
+                        TimePeriod  = {'Start': start_str, 'End': end_str},
+                        Granularity = 'DAILY',
+                        Filter      = {'Dimensions': {'Key': 'SAVINGS_PLAN_ARN', 'Values': [sp_id]}}
+                    )
+                    
+                    for time_period in sp_util.get('SavingsPlansUtilizationsByTime', []):
+                        total = time_period.get('Total', {})
+                        if total:
+                            util = total.get('Utilization', {})
+                            savings = total.get('Savings', {})
+                            results.append({
+                                                'date'                  : time_period.get('TimePeriod', {}).get('Start'),
+                                                'reservation_type'      : 'Savings Plan',
+                                                'subscription_id'       : sp_id,
+                                                'service'               : 'AWS Savings Plans',
+                                                'instance_type'         : details.get('savings_plan_type'),
+                                                'utilization_percentage': round(float(util.get('UtilizationPercentage', '0')), 2),
+                                                'on_demand_cost'        : round(float(savings.get('OnDemandCostEquivalent', '0')), 2),
+                                                'reservation_cost'      : round(float(util.get('UsedCommitment', '0')), 2),
+                                                'net_savings'           : round(float(savings.get('NetSavings', '0')), 2),
+                                                'date_from'             : details.get('date_from'),
+                                                'date_to'               : details.get('date_to')
+                                            })
+                except Exception as e:
+                    if 'DataUnavailableException' not in str(e):
+                        self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error getting RI util for {sp_id} - {str(e)}'})
+                        print(f"Error getting SP util for {sp_id}: {str(e)}")
+                return results
+            
+            # Step 1: Get RI and SP details in parallel
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                ec2_future  = executor.submit(get_ec2_ris)
+                rds_future  = executor.submit(get_rds_ris)
+                sp_future   = executor.submit(get_savings_plans)
+                
+                ec2_ris     = ec2_future.result()
+                rds_ris     = rds_future.result()
+                sp_details  = sp_future.result()
+            
+            # Combine RI details
+            ri_details = {**ec2_ris, **rds_ris}
+            
+            # Step 2: Get utilization for all RIs in parallel
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                ri_futures = [executor.submit(get_ri_utilization, sub_id, details) 
+                             for sub_id, details in ri_details.items()]
+                
+                for future in as_completed(ri_futures):
+                    try:
+                        results = future.result()
+                        daily_savings.extend(results)
+                    except Exception as e:
+                        self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error processing RI future - {str(e)}'})
+                        print(f"Error processing RI future: {str(e)}")
+            
+            # Step 3: Get utilization for all SPs in parallel
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                sp_futures = [executor.submit(get_sp_utilization, sp_id, details) 
+                             for sp_id, details in sp_details.items()]
+                
+                for future in as_completed(sp_futures):
+                    try:
+                        results = future.result()
+                        daily_savings.extend(results)
+                    except Exception as e:
+                        self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error processing SP future - {str(e)}'})
+                        print(f"Error processing SP future: {str(e)}")
+            
+            self.data.set_data(attr=AWSResourceType.RI_SP_SAVINGS, data=daily_savings)
+            self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Pass")
+            return daily_savings
+            
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': str(e)})
+            return []
+
 
 
 def get_data(interval="DAILY", start_date=None, end_date=None):
@@ -2309,6 +2517,7 @@ def get_data(interval="DAILY", start_date=None, end_date=None):
                     executor.submit(timed_call, 'resilience_hub', aws.get_resilience_hub_apps): 'resilience_hub',
                     executor.submit(timed_call, 'health', aws.get_health): 'health',
                     executor.submit(timed_call, 'compute_optimizer', aws.get_compute_optimizer): 'compute_optimizer',
+                    executor.submit(timed_call, 'ri_sp_savings', aws.get_ri_sp_savings): 'ri_sp_savings',
                     executor.submit(timed_call, 'services_resources', aws.get_services_resources): 'services_resources',
                     executor.submit(timed_call, 'support_tickets', aws.get_support_tickets): 'support_tickets'
                   }
@@ -2545,7 +2754,7 @@ if __name__ == "__main__":
     start   = None
     end     = None
 
-    start   = "14-01-2026"  # January 14, 2026
+    start   = "01-01-2026"  # January 14, 2026
     end     = "21-01-2026"  # January 21, 2026
 
     #result  = lambda_handler({"history":True, "start":start, "end":end})
