@@ -210,35 +210,56 @@ CREATE INDEX IF NOT EXISTS idx_support_tickets_severity ON support_tickets(sever
 ### Step 9. Create ri_sp_daily_savings table if not exists
 
 ```
-CREATE TABLE IF NOT EXISTS ri_sp_daily_savings (
+CREATE TABLE ri_sp_daily_savings (
     id SERIAL PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    date DATE NOT NULL,
+    date_from DATE NOT NULL,
+    date_to DATE NOT NULL,
     reservation_type VARCHAR(50) NOT NULL,
     subscription_id VARCHAR(255) NOT NULL,
+    offering_id VARCHAR(255),
+    savings_plan_arn VARCHAR(255),
     service VARCHAR(100),
     instance_type VARCHAR(100),
     instance_count INTEGER,
+    instance_family VARCHAR(100),
+    instance_tenancy VARCHAR(50),
+    offering_class VARCHAR(50),
+    product_types TEXT,
+    region VARCHAR(50),
     utilization_percentage NUMERIC(5,2),
     on_demand_cost NUMERIC(12,2),
     reservation_cost NUMERIC(12,2),
     net_savings NUMERIC(12,2),
-    date_from TIMESTAMP WITH TIME ZONE,
-    date_to TIMESTAMP WITH TIME ZONE,
+    commitment NUMERIC(12,2),
+    upfront_cost NUMERIC(12,2),
+    recurring_cost NUMERIC(12,2),
+    recurring_frequency VARCHAR(20),
+    usage_price NUMERIC(12,2),
+    currency VARCHAR(10),
+    start_date TIMESTAMP WITH TIME ZONE,
+    end_date TIMESTAMP WITH TIME ZONE,
+    returnable_until TIMESTAMP WITH TIME ZONE,
+    duration_seconds INTEGER,
     offering_type VARCHAR(50),
+    state VARCHAR(50),
+    description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT ri_sp_daily_savings_unique UNIQUE (account_id, subscription_id, date)
+    CONSTRAINT ri_sp_daily_savings_unique 
+    UNIQUE (account_id, subscription_id, date_to, reservation_type)
 );
 ```
 
 ### Step 10. Create missing indexes for the ri_sp_daily_savings table
 
 ```
-CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_account_date ON ri_sp_daily_savings(account_id, date);
-CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_subscription ON ri_sp_daily_savings(subscription_id);
-CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_type ON ri_sp_daily_savings(reservation_type);
-CREATE INDEX IF NOT EXISTS idx_ri_sp_savings_service ON ri_sp_daily_savings(service);
+CREATE INDEX idx_ri_sp_savings_account_date ON ri_sp_daily_savings(account_id, date_to);
+CREATE INDEX idx_ri_sp_savings_subscription ON ri_sp_daily_savings(subscription_id);
+CREATE INDEX idx_ri_sp_savings_type ON ri_sp_daily_savings(reservation_type);
+CREATE INDEX idx_ri_sp_savings_service ON ri_sp_daily_savings(service);
+CREATE INDEX idx_ri_sp_savings_state ON ri_sp_daily_savings(state);
+CREATE INDEX idx_ri_sp_savings_region ON ri_sp_daily_savings(region);
 ```
 ## 2. Migrate the Views
 

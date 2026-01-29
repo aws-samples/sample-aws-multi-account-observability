@@ -2323,122 +2323,160 @@ class AWSResourceManager:
             def get_ec2_ris():
                 ri_details = {}
                 try:
-                    ec2     = boto3.client('ec2', region_name=REGION)
+                    ec2 = boto3.client('ec2', region_name=REGION)
                     ec2_ris = ec2.describe_reserved_instances(Filters=[{'Name': 'state', 'Values': ['active']}])
+                    
                     for ri in ec2_ris.get('ReservedInstances', []):
-                        ri_details[ri.get('ReservedInstancesId')] = {
-                                                                        'service'       : 'Amazon EC2',
-                                                                        'instance_type' : ri.get('InstanceType'),
-                                                                        'instance_count': ri.get('InstanceCount'),
-                                                                        'date_from'     : ri.get('Start'),
-                                                                        'date_to'       : ri.get('End'),
-                                                                        'offering_type' : ri.get('OfferingType')
-                                                                    }
+                        ri_id               = ri.get('ReservedInstancesId')
+                        recurring           = ri.get('RecurringCharges', [{}])[0]
+                        ri_details[ri_id]   = {
+                                                'service'               : 'Amazon EC2',
+                                                'instance_type'         : ri.get('InstanceType'),
+                                                'instance_count'        : ri.get('InstanceCount'),
+                                                'instance_tenancy'      : ri.get('InstanceTenancy'),
+                                                'offering_class'        : ri.get('OfferingClass'),
+                                                'offering_type'         : ri.get('OfferingType'),
+                                                'product_types'         : ri.get('ProductDescription'),
+                                                'region'                : ri.get('Scope'),
+                                                'currency'              : ri.get('CurrencyCode'),
+                                                'commitment'            : recurring.get('Amount', 0) * 730,
+                                                'upfront_cost'          : float(ri.get('FixedPrice', 0)),
+                                                'recurring_cost'        : recurring.get('Amount', 0),
+                                                'recurring_frequency'   : recurring.get('Frequency'),
+                                                'usage_price'           : ri.get('UsagePrice'),
+                                                'start_date'            : ri.get('Start'), #did not use date_from as this is the contract start date
+                                                'end_date'              : ri.get('End'), #did not use date_frodate_tom as this is the contract end date
+                                                'duration_seconds'      : ri.get('Duration'),
+                                                'state'                 : ri.get('State'),
+                                                'description'           : f"{ri.get('InstanceCount')}x {ri.get('InstanceType')} {ri.get('ProductDescription')}"
+                                              }
+                    
+                    #print(f"Found {len(ri_details)} active EC2 Reserved Instances")
                 except Exception as e:
                     self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': f'Error getting EC2 RIs - {str(e)}'})
                     print(f"Error getting EC2 RIs: {str(e)}")
+                
                 return ri_details
             
             def get_rds_ris():
                 ri_details = {}
                 try:
-                    rds     = boto3.client('rds', region_name=REGION)
+                    rds = boto3.client('rds', region_name=REGION)
                     rds_ris = rds.describe_reserved_db_instances()
                     for ri in rds_ris.get('ReservedDBInstances', []):
-                        ri_details[ri.get('ReservedDBInstanceId')] ={
-                                                                        'service'       : 'Amazon RDS',
-                                                                        'instance_type' : ri.get('DBInstanceClass'),
-                                                                        'instance_count': ri.get('DBInstanceCount'),
-                                                                        'date_from'     : ri.get('StartTime'),
-                                                                        'offering_type' : ri.get('OfferingType')
-                                                                    }
+                        recurring                                   =  ri.get('RecurringCharges', [{}])[0]
+                        ri_details[ri.get('ReservedDBInstanceId')]  = {
+                                                                        'service'               : 'Amazon RDS',
+                                                                        'instance_type'         : ri.get('DBInstanceClass'),
+                                                                        'instance_count'        : ri.get('DBInstanceCount'),
+                                                                        'offering_class'        : ri.get('OfferingClass'),
+                                                                        'offering_type'         : ri.get('OfferingType'),
+                                                                        'product_types'         : ri.get('ProductDescription'),
+                                                                        'currency'              : ri.get('CurrencyCode'),
+                                                                        'upfront_cost'          : float(ri.get('FixedPrice', 0)),
+                                                                        'recurring_cost'        : recurring.get('Amount', 0),
+                                                                        'recurring_frequency'   : recurring.get('Frequency'),
+                                                                        'usage_price'           : ri.get('UsagePrice'),
+                                                                        'start_date'            : ri.get('StartTime'),
+                                                                        'duration_seconds'      : ri.get('Duration'),
+                                                                        'state'                 : ri.get('State')
+                                                                      }
                 except Exception as e:
                     self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': f'Error getting RDS RIs - {str(e)}'})
                     print(f"Error getting RDS RIs: {str(e)}")
                 return ri_details
             
+            def get_ri_utilization(subscription_id, details):
+                base_record     = {**details, 'date_from': start_str, 'date_to': end_str, 'reservation_type': 'Reserved Instance', 'subscription_id': subscription_id}
+                resp_results    = [{**base_record, 'utilization_percentage': 0, 'on_demand_cost': 0, 'reservation_cost': 0, 'net_savings': 0}]
+
+                try:
+                    ri_util = ce_client.get_reservation_utilization(
+                        TimePeriod={'Start': start_str, 'End': end_str},
+                        Granularity='DAILY',
+                        Filter={'Dimensions': {'Key': 'SUBSCRIPTION_ID', 'Values': [subscription_id]}}
+                    )
+                    
+                    results = []
+                    for time_period in ri_util.get('UtilizationsByTime', []):
+                        if util := time_period.get('Total'):
+                            if float(util.get('UtilizationPercentage', '0')) > 0:
+                                results.append({**base_record,
+                                                'date'                  : time_period.get('TimePeriod', {}).get('Start'),
+                                                'utilization_percentage': round(float(util.get('UtilizationPercentage', '0')), 2),
+                                                'on_demand_cost'        : round(float(util.get('OnDemandCostOfRIHoursUsed', '0')), 2),
+                                                'reservation_cost'      : round(float(util.get('TotalAmortizedFee', '0')), 2),
+                                                'net_savings'           : round(float(util.get('NetRISavings', '0')), 2)
+                                               })
+                    resp_results = results if results else resp_results
+                except Exception as e:
+                    if 'DataUnavailableException' not in str(e) and 'ValidationException' not in str(e):
+                        print(f"Error getting RI util for {subscription_id}: {str(e)}")
+                
+                return resp_results
+            
             def get_savings_plans():
                 sp_details = {}
                 try:
-                    savingsplans    = boto3.client('savingsplans', region_name=REGION)
-                    sps             = savingsplans.describe_savings_plans()
+                    savingsplans = boto3.client('savingsplans', region_name=REGION)
+                    sps = savingsplans.describe_savings_plans(states=['active'])
                     for sp in sps.get('savingsPlans', []):
                         sp_id               = sp.get('savingsPlanId')
                         sp_details[sp_id]   = {
-                                                'savings_plan_type' : sp.get('savingsPlanType'),
-                                                'date_from'         : sp.get('start'),
-                                                'date_to'           : sp.get('end')
+                                                'offering_id'       : sp.get('offeringId'),
+                                                'savings_plan_arn'  : sp.get('savingsPlanArn'),
+                                                'service'           : 'AWS Savings Plans',
+                                                'instance_type'     : sp.get('savingsPlanType'),
+                                                'instance_family'   : sp.get('ec2InstanceFamily'),
+                                                'offering_type'     : sp.get('paymentOption'),
+                                                'product_types'     : ','.join(sp.get('productTypes', [])),
+                                                'region'            : sp.get('region'),
+                                                'currency'          : sp.get('currency'),
+                                                'commitment'        : float(sp.get('commitment', 0)),
+                                                'upfront_cost'      : float(sp.get('upfrontPaymentAmount', 0)),
+                                                'recurring_cost'    : float(sp.get('recurringPaymentAmount', 0)),
+                                                'start_date'        : sp.get('start'),
+                                                'end_date'          : sp.get('end'),
+                                                'returnable_until'  : sp.get('returnableUntil'),
+                                                'duration_seconds'  : sp.get('termDurationInSeconds'),
+                                                'state'             : sp.get('state'),
+                                                'description'       : sp.get('description')
                                               }
                 except Exception as e:
                     self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={'ri_sp_savings': f'Error getting Savings Plans - {str(e)}'})
                     print(f"Error getting Savings Plans: {str(e)}")
+                
                 return sp_details
-            
-            def get_ri_utilization(subscription_id, details):
-                results = []
-                try:
-                    ri_util = ce_client.get_reservation_utilization(
-                        TimePeriod  = {'Start': start_str, 'End': end_str},
-                        Granularity = 'DAILY',
-                        Filter      = {'Dimensions': {'Key': 'SUBSCRIPTION_ID', 'Values': [subscription_id]}}
-                    )
-                    
-                    for time_period in ri_util.get('UtilizationsByTime', []):
-                        util = time_period.get('Total', {})
-                        if float(util.get('UtilizationPercentage', '0')) > 0:
-                            results.append({
-                                            'date'                  : time_period.get('TimePeriod', {}).get('Start'),
-                                            'reservation_type'      : 'Reserved Instance',
-                                            'subscription_id'       : subscription_id,
-                                            'service'               : details.get('service'),
-                                            'instance_type'         : details.get('instance_type'),
-                                            'instance_count'        : details.get('instance_count'),
-                                            'utilization_percentage': round(float(util.get('UtilizationPercentage', '0')), 2),
-                                            'on_demand_cost'        : round(float(util.get('OnDemandCostOfRIHoursUsed', '0')), 2),
-                                            'reservation_cost'      : round(float(util.get('TotalAmortizedFee', '0')), 2),
-                                            'net_savings'           : round(float(util.get('NetRISavings', '0')), 2),
-                                            'date_from'             : details.get('date_from'),
-                                            'date_to'               : details.get('date_to'),
-                                            'offering_type'         : details.get('offering_type')
-                                        })
-                except Exception as e:
-                    if 'DataUnavailableException' not in str(e):
-                        self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error getting RI util for {subscription_id} - {str(e)}'})
-                        print(f"Error getting RI util for {subscription_id}: {str(e)}")
-                return results
-            
+
             def get_sp_utilization(sp_id, details):
-                results = []
+                base_record = {**details, 'date_from': start_str, 'date_to': end_str, 'reservation_type': 'Savings Plan', 'subscription_id': sp_id}
+                resp_result = [{**base_record, 'utilization_percentage': 0, 'on_demand_cost': 0, 'reservation_cost': 0, 'net_savings': 0}]
+                
                 try:
                     sp_util = ce_client.get_savings_plans_utilization(
-                        TimePeriod  = {'Start': start_str, 'End': end_str},
-                        Granularity = 'DAILY',
-                        Filter      = {'Dimensions': {'Key': 'SAVINGS_PLAN_ARN', 'Values': [sp_id]}}
+                        TimePeriod={'Start': start_str, 'End': end_str},
+                        Granularity='DAILY',
+                        Filter={'Dimensions': {'Key': 'SAVINGS_PLAN_ARN', 'Values': [details.get('savings_plan_arn')]}}
                     )
                     
+                    results = []
                     for time_period in sp_util.get('SavingsPlansUtilizationsByTime', []):
-                        total = time_period.get('Total', {})
-                        if total:
-                            util = total.get('Utilization', {})
-                            savings = total.get('Savings', {})
-                            results.append({
+                        if total := time_period.get('Total'):
+                            util, savings = total.get('Utilization', {}), total.get('Savings', {})
+                            results.append({**base_record,
                                                 'date'                  : time_period.get('TimePeriod', {}).get('Start'),
-                                                'reservation_type'      : 'Savings Plan',
-                                                'subscription_id'       : sp_id,
-                                                'service'               : 'AWS Savings Plans',
-                                                'instance_type'         : details.get('savings_plan_type'),
                                                 'utilization_percentage': round(float(util.get('UtilizationPercentage', '0')), 2),
                                                 'on_demand_cost'        : round(float(savings.get('OnDemandCostEquivalent', '0')), 2),
                                                 'reservation_cost'      : round(float(util.get('UsedCommitment', '0')), 2),
-                                                'net_savings'           : round(float(savings.get('NetSavings', '0')), 2),
-                                                'date_from'             : details.get('date_from'),
-                                                'date_to'               : details.get('date_to')
+                                                'net_savings'           : round(float(savings.get('NetSavings', '0')), 2)
                                             })
+                    
+                    resp_result = results if results else resp_result
                 except Exception as e:
                     if 'DataUnavailableException' not in str(e):
-                        self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error getting RI util for {sp_id} - {str(e)}'})
                         print(f"Error getting SP util for {sp_id}: {str(e)}")
-                return results
+                
+                return resp_result
             
             # Step 1: Get RI and SP details in parallel
             with ThreadPoolExecutor(max_workers=3) as executor:
@@ -2460,12 +2498,12 @@ class AWSResourceManager:
                 
                 for future in as_completed(ri_futures):
                     try:
-                        results = future.result()
-                        daily_savings.extend(results)
+                        if results := future.result():
+                            daily_savings.extend(results)
                     except Exception as e:
                         self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error processing RI future - {str(e)}'})
                         print(f"Error processing RI future: {str(e)}")
-            
+
             # Step 3: Get utilization for all SPs in parallel
             with ThreadPoolExecutor(max_workers=10) as executor:
                 sp_futures = [executor.submit(get_sp_utilization, sp_id, details) 
@@ -2473,12 +2511,12 @@ class AWSResourceManager:
                 
                 for future in as_completed(sp_futures):
                     try:
-                        results = future.result()
-                        daily_savings.extend(results)
+                        if results := future.result():
+                            daily_savings.extend(results)
                     except Exception as e:
                         self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Fail", value={f'ri_sp_savings': f'Error processing SP future - {str(e)}'})
                         print(f"Error processing SP future: {str(e)}")
-            
+  
             self.data.set_data(attr=AWSResourceType.RI_SP_SAVINGS, data=daily_savings)
             self.set_log(def_type=AWSResourceType.RI_SP_SAVINGS, status="Pass")
             return daily_savings

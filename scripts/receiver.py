@@ -67,7 +67,8 @@ AWS_TYPECAST_2  =   {
                                                             'start_date',
                                                             'end_date',
                                                             'date',
-                                                            'time_created'
+                                                            'time_created',
+                                                            'returnable_until'
                                                         ],
                         'period_granularity_type'   :   [
                                                             'period_granularity'
@@ -1291,24 +1292,29 @@ class CoreManager:
         except Exception as e:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.SUPPORT_TICKETS, msg=e)
             return False
-
     #Method: UPSERT
     def load_ri_sp_savings_data(self, data: List[Dict]) -> bool:
         """Load RI/SP daily savings data with blazing fast upsert"""
         try:
+            if not isinstance(data, list) or not self.curr_acct:
+                return False
+            
             ri_sp_fields = {
-                'account_id', 'date', 'reservation_type', 'subscription_id', 'service',
-                'instance_type', 'instance_count', 'utilization_percentage', 'on_demand_cost',
-                'reservation_cost', 'net_savings', 'date_from', 'date_to', 'offering_type'  # Changed field names
+                'account_id', 'date_from', 'date_to', 'reservation_type', 'subscription_id', 'offering_id',
+                'savings_plan_arn', 'service', 'instance_type', 'instance_count', 'instance_family',
+                'instance_tenancy', 'offering_class', 'offering_type', 'product_types', 'region',
+                'utilization_percentage', 'on_demand_cost', 'reservation_cost', 'net_savings',
+                'commitment', 'upfront_cost', 'recurring_cost', 'recurring_frequency', 'usage_price',
+                'currency', 'start_date', 'end_date', 'returnable_until', 'duration_seconds',
+                'state', 'description'
             }
             
-            if isinstance(data, list) and self.curr_acct is not None:
-                for record in data:
-                    filtered_record = {k: v for k, v in record.items() if k in ri_sp_fields}
-                    filtered_record['account_id'] = self.curr_acct['id']
-                    
-                    self.db.upsert('ri_sp_daily_savings', filtered_record, 
-                                  ['account_id', 'subscription_id', 'date'], self.stats)
+            for record in data:
+                filtered_record = {k: v for k, v in record.items() if k in ri_sp_fields}
+                filtered_record['account_id'] = self.curr_acct['id']
+                
+                self.db.upsert('ri_sp_daily_savings', filtered_record, 
+                              ['account_id', 'subscription_id', 'date_from', 'date_to', 'reservation_type'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.RI_SP_SAVINGS)
             return True
