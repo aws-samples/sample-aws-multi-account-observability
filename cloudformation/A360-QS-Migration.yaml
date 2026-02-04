@@ -217,7 +217,7 @@ Resources:
                     self.secret_arn     = os.environ['AURORA_SECRET_ARN']  # checkov:skip=CKV_SECRET_6:Environment variable reference
                     self.s3_uri         = os.environ['S3_URI']
                     self.analysis_name  = os.environ.get('NEW_ANALYSIS_NAME', f"NEW-{str(uuid.uuid4())}")
-                    self.group_name     = "mao-qs-admin"
+                    self.group_name     = "AWSAdminGroup"
                 
                 def log(self, icon, msg): print(f"{icon} {msg}")
                 
@@ -346,20 +346,18 @@ Resources:
                     """Create datasets with permissions"""
                     created = []
                     current_user = self.get_current_user_arn()
-                    all_datasets = []  # Initialize here
                     
-                    # Print table header once
-                    headers = ["   #", f"{DEFAULT} Status", "Dataset Name",  "Columns", "Permissions"]
-                    widths = [6, 8, 35, 10, 12]
-                    total_width = sum(widths) + (len(headers) - 1) * 3  # 3 chars for " | "
+                    # Print header
+                    headers = ["#", f"{DEFAULT} Status", "Dataset Name", "Columns", "Permissions"]
+                    widths = [6, 14, 35, 10, 14]
+                    total_width = sum(widths) + (len(headers) - 1) * 3
                     
                     print(f"{INFO} Processing {len(dataset_names)} datasets")
                     print('-' * total_width)
-                    header = " | ".join(f"{headers[i]:<{widths[i]}}" for i in range(len(headers)))
-                    print(header)
+                    print(" | ".join(f"{headers[i]:<{widths[i]}}" for i in range(len(headers))))
                     print('-' * total_width)
                     
-                    # Get all existing datasets with pagination (once at start)
+                    # Get existing datasets once
                     all_datasets = []
                     next_token = None
                     while True:
@@ -372,46 +370,63 @@ Resources:
                         if not next_token:
                             break
                     
-                    # Filter out deleted datasets
                     active_datasets = [ds for ds in all_datasets if ds.get('Status') != 'DELETED']
                     
+                    # Process each dataset
                     for i, name in enumerate(dataset_names, 1):
                         dataset_id = str(uuid.uuid4())
-                        status = f"{WARN} EXISTS"
+                        table_columns = columns.get(name, [])
                         
-                        # Check if exists in active datasets
+                        # Check if dataset exists
                         existing = next((ds for ds in active_datasets if ds['Name'] == name), None)
+                        
                         if existing:
                             dataset_id = existing['DataSetId']
+                            status = f"{WARN} EXISTS"
+                            perm_status = f"{INFO} GRANTED"
+                        elif not table_columns:
+                            # Skip if no columns
+                            row_data = [f"   {i}", f"{ERROR} SKIPPED", name, "0", "No columns"]
+                            print(" | ".join(f"{row_data[j]:<{widths[j]}}" for j in range(len(row_data))))
+                            continue
                         else:
-                            # Create dataset
-                            table_columns = columns.get(name, [])
-                            physical_table = {
-                                'RelationalTable': {
-                                    'DataSourceArn': datasource_arn, 'Name': name,
-                                    'InputColumns': [{'Name': col[0], 'Type': self._map_type(col[1])} for col in table_columns]
+                            # Create new dataset
+                            try:
+                                physical_table = {
+                                    'RelationalTable': {
+                                        'DataSourceArn': datasource_arn,
+                                        'Name': name,
+                                        'InputColumns': [{'Name': col[0], 'Type': self._map_type(col[1])} for col in table_columns]
+                                    }
                                 }
-                            }
-                            
-                            self.qs.create_data_set(AwsAccountId=self.account_id, DataSetId=dataset_id, Name=name,
-                                                    PhysicalTableMap={'table1': physical_table}, ImportMode='DIRECT_QUERY')
-                            status = f"{SUCCESS} CREATED"
+                                
+                                self.qs.create_data_set(
+                                    AwsAccountId=self.account_id,
+                                    DataSetId=dataset_id,
+                                    Name=name,
+                                    PhysicalTableMap={'table1': physical_table},
+                                    ImportMode='DIRECT_QUERY'
+                                )
+                                status = f"{SUCCESS} CREATED"
+                                perm_status = f"{INFO} GRANTED"
+                            except Exception as e:
+                                row_data = [f"   {i}", f"{ERROR} FAILED", name, str(len(table_columns)), str(e)[:14]]
+                                print(" | ".join(f"{row_data[j]:<{widths[j]}}" for j in range(len(row_data))))
+                                continue
                         
                         # Grant permissions
                         self._grant_dataset_permissions(dataset_id, group_arn, current_user, name)
                         
-                        # Print single row immediately
-                        row_data    = [f"   {str(i)}", status, name, str(len(columns.get(name, []))), f"{INFO} GRANTED"]
-                        row         = " | ".join(f"{row_data[j]:<{widths[j]}}" for j in range(len(row_data)))
-                        print(row)
+                        # Print row
+                        row_data = [f"   {i}", status, name, str(len(table_columns)), perm_status]
+                        print(" | ".join(f"{row_data[j]:<{widths[j]}}" for j in range(len(row_data))))
                         
+                        # Add to created list
                         dataset_arn = f"arn:aws:quicksight:{self.region}:{self.account_id}:dataset/{dataset_id}"
                         created.append({'Name': name, 'Arn': dataset_arn})
                     
-                    # Print footer after all datasets processed
                     print('-' * total_width)
-                    print("\n") 
-                    #print(f"Total: {len(dataset_names)} datasets processed")
+                    print("\n")
                     
                     return created
                 
