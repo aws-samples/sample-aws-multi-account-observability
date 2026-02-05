@@ -282,6 +282,28 @@ Resources:
             Action:
               - application-signals:ListServices
             Resource: "*"
+          - Sid: SQSAccess
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt A360DLQ.Arn
+  
+  A360SenderResourcePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Cost Explorer APIs don't support resource-level permissions"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "Cost Explorer APIs require wildcard"
+    Properties:
+      Description: Cost and Reservation policy for A360 Sender
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
           - Sid: ResilienceHubAccess
             Effect: Allow
             Action:
@@ -385,12 +407,7 @@ Resources:
               - logs:PutLogEvents
             Resource: 
               - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
-          - Sid: SQSAccess
-            Effect: Allow
-            Action:
-              - sqs:SendMessage
-            Resource: !GetAtt A360DLQ.Arn
-  
+
   A360SenderCostPolicy:
     Type: AWS::IAM::ManagedPolicy
     Metadata:
@@ -446,7 +463,7 @@ Resources:
               - compute-optimizer:GetEBSVolumeRecommendations
               - compute-optimizer:GetLambdaFunctionRecommendations
             Resource: "*"
- 
+
   A360LambdaSenderRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -462,6 +479,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !Ref A360SenderPolicy
         - !Ref A360SenderCostPolicy
+        - !Ref A360SenderResourcePolicy
 
   LambdaKMSKey:
     Type: 'AWS::KMS::Key'

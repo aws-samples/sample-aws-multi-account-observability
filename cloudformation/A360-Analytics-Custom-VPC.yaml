@@ -552,17 +552,18 @@ Resources:
             Resource: "*"
 
   A360SenderPolicy:
-    Type: AWS::IAM::ManagedPolicy
+    Type: 'AWS::IAM::ManagedPolicy'
     Metadata:
       cfn_nag:
         rules_to_suppress:
           - id: W13
-            reason: "Multi-service data collection requires wildcard"
+            reason: "Multi-service data collection requires wildcard for AWS APIs"
       checkov:
         skip:
           - id: "CKV_AWS_111"
-            comment: "Multi-service data collection requires wildcard"
+            comment: "Multi-service data collection requires wildcard for AWS APIs"
     Properties:
+      # Removed ManagedPolicyName to allow CloudFormation to generate a name
       Description: Policy for A360 Sender Lambda function
       PolicyDocument:
         Version: '2012-10-17'
@@ -572,29 +573,25 @@ Resources:
             Action:
               - s3:ListBucket
             Resource:
-              - !GetAtt S3Bucket.Arn
-            Condition:
-              StringLike:
-                s3:prefix: 
-                  - "data/*"
-                  - "scripts/sender.py"
+              - !Sub arn:aws:s3:::${S3Bucket}
           - Sid: S3ObjectAccess
             Effect: Allow
             Action:
+              - s3:GetObject
               - s3:PutObject
             Resource:
-              - !Sub "${S3Bucket.Arn}/data/*"
+              - !Sub arn:aws:s3:::${S3Bucket}/data/*
           - Sid: S3ScriptReadOnly
             Effect: Allow
             Action:
               - s3:GetObject
             Resource:
-              - !Sub "${S3Bucket.Arn}/scripts/sender.py"
+              - !Sub arn:aws:s3:::${S3Bucket}/scripts/sender.py
           - Sid: STSAccess
             Effect: Allow
             Action:
               - sts:GetCallerIdentity
-            Resource: "*"
+            Resource: "*" # This is acceptable as GetCallerIdentity doesn't support resource-level permissions
           - Sid: AccountAccess
             Effect: Allow
             Action:
@@ -604,7 +601,7 @@ Resources:
               - account:GetPrimaryEmail
               - account:GetRegionOptStatus
               - account:ListRegions
-            Resource: "*"
+            Resource: !Sub "arn:aws:account::${AWS::AccountId}:account"
           - Sid: CostExplorerAccess
             Effect: Allow
             Action:
@@ -615,7 +612,7 @@ Resources:
               - ce:GetCostCategories
               - ce:GetDimensionValues
               - ce:GetPreferences
-            Resource: "*"
+            Resource: "*" # Cost Explorer APIs don't support resource-level permissions
           - Sid: ConfigAccess
             Effect: Allow
             Action:
@@ -646,7 +643,7 @@ Resources:
               - guardduty:ListFindings
               - guardduty:GetFindings
             Resource: "*"
-          - Sid: IAMReadAccess
+          - Sid: IAMAccess
             Effect: Allow
             Action:
               - iam:ListUsers
@@ -654,20 +651,22 @@ Resources:
               - iam:ListPolicies
               - iam:ListMFADevices
               - iam:ListAccessKeys
-            Resource: "*"
-          - Sid: KMSReadAccess
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:*"
+          - Sid: KMSAccess
             Effect: Allow
             Action:
               - kms:ListKeys
               - kms:DescribeKey
               - kms:GetKeyRotationStatus
-            Resource: "*"
+            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
           - Sid: KMSDecryptAccess
             Effect: Allow
             Action:
               - kms:Decrypt
               - kms:DescribeKey
-            Resource: "*"
+            Resource: 
+              - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${A360KMSKey}"
+              - "arn:aws:kms:*:*:alias/aws/sqs"
           - Sid: KMSEncryptAccess
             Effect: Allow
             Action:
@@ -675,7 +674,7 @@ Resources:
               - kms:GenerateDataKey
               - kms:GenerateDataKeyWithoutPlaintext
               - kms:ReEncrypt*
-            Resource: !GetAtt A360KMSKey.Arn
+            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${A360KMSKey}"
           - Sid: WAFAccess
             Effect: Allow
             Action:
@@ -696,7 +695,7 @@ Resources:
               - cloudtrail:GetTrailStatus
               - cloudtrail:LookupEvents
             Resource: "*"
-          - Sid: SecretsManagerReadAccess
+          - Sid: SecretsManagerAccess
             Effect: Allow
             Action:
               - secretsmanager:ListSecrets
@@ -732,6 +731,28 @@ Resources:
             Action:
               - application-signals:ListServices
             Resource: "*"
+          - Sid: SQSAccess
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt LambdaDLQ.Arn
+  
+  A360SenderResourcePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Cost Explorer APIs don't support resource-level permissions"
+      checkov:
+        skip:
+          - id: "CKV_AWS_111"
+            comment: "Cost Explorer APIs require wildcard"
+    Properties:
+      Description: Cost and Reservation policy for A360 Sender
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
           - Sid: ResilienceHubAccess
             Effect: Allow
             Action:
@@ -801,19 +822,41 @@ Resources:
               - compute-optimizer:GetEBSVolumeRecommendations
               - compute-optimizer:GetLambdaFunctionRecommendations
             Resource: "*"
+          - Sid: ReservationAccess
+            Effect: Allow
+            Action:
+              - ce:GetReservationUtilization
+              - ce:GetReservationCoverage
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetSavingsPlansCoverage
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansPurchaseRecommendation
+            Resource: "*"
+          - Sid: EC2ReservationAccess
+            Effect: Allow
+            Action:
+              - ec2:DescribeReservedInstances
+            Resource: "*"
+          - Sid: RDSReservationAccess
+            Effect: Allow
+            Action:
+              - rds:DescribeReservedDBInstances
+            Resource: "*"
+          - Sid: SavingsPlansAccess
+            Effect: Allow
+            Action:
+              - savingsplans:DescribeSavingsPlans
+            Resource: "*"
+
           - Sid: LogsAccess
             Effect: Allow
             Action:
               - logs:CreateLogGroup
               - logs:CreateLogStream
               - logs:PutLogEvents
-            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
-          - Sid: SQSAccess
-            Effect: Allow
-            Action:
-              - sqs:SendMessage
-            Resource: !GetAtt LambdaDLQ.Arn
-  
+            Resource: 
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/A360-sender*"
+
   A360SenderCostPolicy:
     Type: AWS::IAM::ManagedPolicy
     Metadata:
@@ -939,6 +982,8 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !Ref A360SenderPolicy
         - !Ref A360SenderCostPolicy
+        - !Ref A360SenderResourcePolicy
+        
 
   # Dead Letter Queue for Lambda functions
   LambdaDLQ:
