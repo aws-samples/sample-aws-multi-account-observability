@@ -989,7 +989,7 @@ class CoreManager:
                                     'is_latest_version','association_status','association_execution_date','association_success_date'
                                 }
             app_fields      =   {
-                                    'instance_id', 'account_id', 'name', 'version', 'publisher', 'install_time'
+                                    'instance_id', 'account_id', 'name', 'version', 'publisher', 'architecture', 'application_type', 'install_time'
                                 }
             patch_fields    =   {
                                     'instance_id', 'account_id', 'title', 'classification', 'severity', 
