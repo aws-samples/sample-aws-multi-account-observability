@@ -520,6 +520,8 @@ CREATE TABLE inventory_applications (
     name VARCHAR(255),
     version VARCHAR(100),
     publisher VARCHAR(255),
+    architecture TEXT,
+    application_type TEXT,
     install_time TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
