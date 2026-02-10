@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv() """
-
+load_dotenv()
+ """
 """ IMPORTS """
 import sys
 import boto3
@@ -999,6 +999,25 @@ class AWSResourceManager:
                     'association_success_date'      : instance.get('LastSuccessfulAssociationExecutionDate')
                 })
                 
+                try:
+                    app_resp = ssm.list_inventory_entries(
+                        InstanceId=instance_id,
+                        TypeName='AWS:Application'
+                    )
+                    
+                    for app in app_resp.get('Entries', []):
+                        security_inventory['applications'].append({
+                            'instance_id'       : instance_id,
+                            'name'              : app.get('Name'),
+                            'version'           : app.get('Version'),
+                            'publisher'         : app.get('Publisher'),
+                            'architecture'      : app.get('Architecture'),
+                            'application_type'  : app.get('ApplicationType'),
+                            'install_time'      : app.get('InstalledTime')
+                        })
+                except Exception as e:
+                    print(f"Error getting applications for {instance_id}: {str(e)}")
+            
                 # Get security-relevant inventory types (only supported ones)
                 for inv_type, key in [('AWS:PatchSummary', 'patches')]:
                     try:
