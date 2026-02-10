@@ -173,6 +173,14 @@ ADD COLUMN IF NOT EXISTS association_execution_date TIMESTAMP WITH TIME ZONE,
 ADD COLUMN IF NOT EXISTS association_success_date TIMESTAMP WITH TIME ZONE;
 ```
 
+#### Step 6.1 Add missing columns to inventory_applications
+
+```
+ALTER TABLE inventory_applications
+ADD COLUMN IF NOT EXISTS architecture TEXT,
+ADD COLUMN IF NOT EXISTS application_type TEXT;
+```
+
 ### Step 7. Create support_tickets table if not exists
 
 ```
