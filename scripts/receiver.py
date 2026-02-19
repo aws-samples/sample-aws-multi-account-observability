@@ -91,7 +91,9 @@ AWS_TYPECAST_2  =   {
                                                             'on_demand_cost',
                                                             'reservation_cost',
                                                             'net_savings',
-                                                            'instance_count'
+                                                            'instance_count',
+                                                            'min_size',
+                                                            'max_size'
                                                         ],
                         'jsonb'                     :   [
                                                             'key_attributes',
@@ -1021,7 +1023,6 @@ class CoreManager:
                     filtered_app                = {k: v for k, v in app.items() if k in app_fields}
                     filtered_app['instance_id'] = first_instance_db_id
                     filtered_app['account_id']  = self.curr_acct['id']  # Add account_id
-                    
                     self.db.upsert('inventory_applications', filtered_app, ['instance_id', 'name'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.INVENTORY, msg="Inventory Applications Loaded")
 
@@ -1198,12 +1199,18 @@ class CoreManager:
                                     'type', 'scheme', 'instance_count', 'min_size', 'max_size', 'available_ip_count'
                                 }
             
+            numeric_fields  =   {'instance_count', 'min_size', 'max_size', 'available_ip_count', 'size_gb'}
+
             if isinstance(data, list) and self.curr_acct is not None:
                 for resource in data:
                     # Filter to only schema fields
                     filtered_resource               = {k: v for k, v in resource.items() if k in resource_fields}
                     filtered_resource['account_id'] = self.curr_acct['id']
                     
+                    for field in numeric_fields:
+                        if field in filtered_resource and filtered_resource[field] in ('', None):
+                            filtered_resource[field] = None
+
                     # Upsert using composite unique key (account_id + resource_id)
                     self.db.upsert('service_resources', filtered_resource, ['account_id', 'resource_id'], self.stats)
 

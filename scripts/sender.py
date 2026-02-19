@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
-""" from dotenv import load_dotenv, dotenv_values
+from dotenv import load_dotenv, dotenv_values
 load_dotenv()
- """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -2247,7 +2247,7 @@ class AWSResourceManager:
                             type=func.get('PackageType'),
                             scheme=func.get('Architectures', ['x86_64'])[0],
                             instance_count=1,
-                            min_size="",
+                            min_size=None,
                             max_size=func.get('EphemeralStorage', {}).get('Size', 512),
                             available_ip_count=None
                         ))
