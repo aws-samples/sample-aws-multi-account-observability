@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
-from dotenv import load_dotenv, dotenv_values
+""" from dotenv import load_dotenv, dotenv_values
 load_dotenv()
-
+ """
 """ IMPORTS """
 import sys
 import boto3
