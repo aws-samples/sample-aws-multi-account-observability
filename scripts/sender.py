@@ -1,7 +1,7 @@
 """ONLY FOR DEVELOPMENT REMOVE ON LAMBDA"""
 """ from dotenv import load_dotenv, dotenv_values
-load_dotenv()
- """
+load_dotenv() """
+
 """ IMPORTS """
 import sys
 import boto3
@@ -641,13 +641,13 @@ class AWSResourceManager:
                 Granularity =   self.interval,
                 Metrics     =   ['UnblendedCost'], #REMOVED ['BlendedCost', 'NetUnblendedCost', 'AmortizedCost', 'UsageQuantity'] # NOT USED
                 GroupBy     =   [{'Type': 'DIMENSION', 'Key': 'SERVICE'}], #REMOVED {'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'} #this gives too much data
-                #Filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
-                Filter      =   {
-                                    'And': [
-                                        {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}},
-                                        {'Dimensions': {'Key': 'REGION', 'Values': [self.region]}}
-                                    ]
-                                }
+                Filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+                #Filter      =   {
+                #                    'And': [
+                #                        {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}},
+                #                        {'Dimensions': {'Key': 'REGION', 'Values': [self.region]}}
+                #                    ]
+                #                }
 
             ))
 
@@ -820,12 +820,13 @@ class AWSResourceManager:
 
     #4. Fetching Cost Data
     def get_cost(self):
-        cost_filter =   {
-                            'And': [
-                                {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}},
-                                {'Dimensions': {'Key': 'REGION', 'Values': [self.region]}}
-                            ]
-                        }
+        cost_filter      =   {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}}
+        #cost_filter =   {
+        #                    'And': [
+        #                        {'Dimensions': {'Key': 'LINKED_ACCOUNT', 'Values': [self.account_id]}},
+        #                        {'Dimensions': {'Key': 'REGION', 'Values': [self.region]}}
+        #                    ]
+        #                }
         try:
             if not self.get_date():
                 return None
@@ -839,8 +840,11 @@ class AWSResourceManager:
                 TimePeriod={'Start': start_date, 'End': end_date},
                 Granularity=self.interval,
                 Metrics=['UnblendedCost'], #, 'BlendedCost', 'NetUnblendedCost', 'AmortizedCost'
+                #GroupBy=[{'Type': 'DIMENSION', 'Key': 'REGION'}],
                 Filter=cost_filter
             ))
+           
+            #print(json.dumps(current_costs.data, indent=2, default=str))
             
             # Get service breakdown
             service_costs = AWSResponse(ce_client.get_cost_and_usage(
@@ -850,6 +854,7 @@ class AWSResourceManager:
                 GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
                 Filter=cost_filter
             ))
+            #print(json.dumps(service_costs.data, indent=2, default=str))
             
             prev_end    = self.start_date.strftime('%Y-%m-%d') if self.start_date else ''
             prev_start  = (self.start_date - timedelta(days=self.days)).strftime('%Y-%m-%d') if self.start_date else ''
@@ -1686,7 +1691,7 @@ class AWSResourceManager:
                 first_observed  = finding.get('firstObservedAt')
                 last_observed   = finding.get('lastObservedAt')
                 updated_at      = finding.get('updatedAt')
-                
+                #print(json.dumps(finding, indent=2, default=str))
                 # Filter findings observed or updated within date range
                 if (first_observed and start_date_aware <= first_observed <= end_date_aware) or \
                    (last_observed and start_date_aware <= last_observed <= end_date_aware) or \
@@ -2811,8 +2816,8 @@ if __name__ == "__main__":
     start   = None
     end     = None
 
-    start   = "01-01-2026"  # January 14, 2026
-    end     = "21-01-2026"  # January 21, 2026
+    start   = "06-03-2026"  # January 14, 2026
+    end     = "07-03-2026"  # January 21, 2026
 
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     

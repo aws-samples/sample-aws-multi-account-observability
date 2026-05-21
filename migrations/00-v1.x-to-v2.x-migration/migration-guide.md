@@ -269,6 +269,36 @@ CREATE INDEX idx_ri_sp_savings_service ON ri_sp_daily_savings(service);
 CREATE INDEX idx_ri_sp_savings_state ON ri_sp_daily_savings(state);
 CREATE INDEX idx_ri_sp_savings_region ON ri_sp_daily_savings(region);
 ```
+
+
+### Step 11. Add 2 attributes for the Cost Related tables
+
+#### Step 11.1 cost_reports: add region, swap unique constraint
+
+ALTER TABLE cost_reports
+    ADD COLUMN region TEXT DEFAULT 'Global';
+
+ALTER TABLE cost_reports
+    DROP CONSTRAINT cost_reports_account_id_period_start_key;
+
+ALTER TABLE cost_reports
+    ADD CONSTRAINT cost_reports_account_id_period_start_region_key
+    UNIQUE (account_id, period_start, region);
+
+
+#### Step 11.2 service_costs: add region only
+
+ALTER TABLE service_costs
+    ADD COLUMN region TEXT DEFAULT 'Global';
+
+
+#### Step 11.3 cost_forecasts: add region only
+
+ALTER TABLE cost_forecasts
+    ADD COLUMN region TEXT DEFAULT 'Global';
+
+
+
 ## 2. Migrate the Views
 
 ### Step 1. Drop all the old views

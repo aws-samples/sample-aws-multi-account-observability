@@ -95,7 +95,8 @@ CREATE TABLE cost_reports (
     period_end DATE NOT NULL,
     period_granularity period_granularity_type NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (account_id, period_start)
+    region TEXT DEFAULT 'Global',
+    UNIQUE (account_id, period_start, region)
 );
 
 -- Create the services cost table for top services
@@ -104,7 +105,8 @@ CREATE TABLE service_costs (
     cost_report_id INTEGER REFERENCES cost_reports(id) ON DELETE CASCADE,
     service_name VARCHAR(255) NOT NULL,
     cost NUMERIC(20,10) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    region TEXT DEFAULT 'Global'
 );
 
 -- Create the forecast table
@@ -116,7 +118,8 @@ CREATE TABLE cost_forecasts (
     amount NUMERIC(20,10) NOT NULL,
     prediction_interval_lower_bound NUMERIC(20,10),
     prediction_interval_upper_bound NUMERIC(20,10),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    region TEXT DEFAULT 'Global'
 );
 
 

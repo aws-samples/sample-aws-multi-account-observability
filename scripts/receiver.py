@@ -751,10 +751,11 @@ class CoreManager:
                                 'account_id'        : self.curr_acct['id'],
                                 'period_start'      : period.get('start'),
                                 'period_end'        : period.get('end'),
-                                'period_granularity': period.get('granularity')
+                                'period_granularity': period.get('granularity'),
+                                'region'            : "Global"                  # Cost Explorer is a Global Service
                             }
             
-            result = self.db.upsert('cost_reports', cost_report, ['account_id', 'period_start'], self.stats)
+            result = self.db.upsert('cost_reports', cost_report, ['account_id', 'period_start', 'region'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Cost Reports Loaded")
 
@@ -775,9 +776,10 @@ class CoreManager:
                     service_data =  {
                                         'cost_report_id': cost_report_id,
                                         'service_name'  : service['service'],
-                                        'cost'          : service['cost']
+                                        'cost'          : service['cost'],
+                                        'region'        : "Global"                  # Cost Explorer is a Global Service
                                     }
-                    self.db.upsert('service_costs', service_data, ['cost_report_id', 'service_name'], self.stats)
+                    self.db.upsert('service_costs', service_data, ['cost_report_id', 'service_name', 'region'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Service Cost Loaded")
 
             # Load forecasts (children)
@@ -789,10 +791,11 @@ class CoreManager:
                                         'cost_report_id': cost_report_id,
                                         'period_start'  : forecast['period']['start'],
                                         'period_end'    : forecast['period']['end'],
-                                        'amount'        : forecast['amount']
+                                        'amount'        : forecast['amount'],
+                                        'region'        : "Global"                  # Cost Explorer is a Global Service
                                     }
                     
-                    self.db.upsert('cost_forecasts', forecast_data, ['cost_report_id', 'period_start'], self.stats)
+                    self.db.upsert('cost_forecasts', forecast_data, ['cost_report_id', 'period_start', 'region'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Cost Forecast Loaded")
 
             

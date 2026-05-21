@@ -911,7 +911,7 @@ Resources:
           - id: "CKV_AWS_111"
             comment: "QuickSight VPC operations require wildcard resources"
     Properties:
-      PolicyName: A360QuicksightVpcPolicy
+      PolicyName: !Sub "${AWS::StackName}-QuicksightVpcPolicy"
       Roles:
         - aws-quicksight-service-role-v0
       PolicyDocument:

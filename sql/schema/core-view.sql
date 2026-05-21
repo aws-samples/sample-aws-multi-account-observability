@@ -672,7 +672,26 @@ FROM
 --29. Inventory applications view
 CREATE OR REPLACE VIEW view_inventory_applications AS
 SELECT
-    ia.*,
+    ia.name,
+    -- inventory_instances attributes (prefixed to avoid conflicts)
+    ii.id as ii_id,
+    ii.account_id as ii_account_id,
+    ii.instance_id as ii_instance_id,
+    ii.instance_type,
+    ii.platform,
+    ii.ip_address,
+    ii.computer_name,
+    ii.ping_status,
+    ii.last_ping_date_time,
+    ii.agent_version,
+    ii.platform_type,
+    ii.platform_version,
+    ii.is_latest_version,
+    ii.association_status,
+    ii.association_execution_date,
+    ii.association_success_date,
+    ii.created_at as ii_created_at,
+    -- account attributes
     a.account_id as account,
     a.region as account_region,
     a.account_name,
