@@ -105,6 +105,7 @@ class AWSResourceData:
     cost			    : List[Dict[str, Any]]  = field(default_factory=list)
     security		    : List[Dict[str, Any]]  = field(default_factory=list)
     inventory		    : List[Dict[str, Any]]  = field(default_factory=list)
+    ai_inventory	    : List[Dict[str, Any]]  = field(default_factory=list)
     marketplace		    : List[Dict[str, Any]]  = field(default_factory=list)
     trusted_advisor	    : List[Dict[str, Any]]  = field(default_factory=list)
     health			    : List[Dict[str, Any]]  = field(default_factory=list)
@@ -124,6 +125,7 @@ class AWSResourceType(str, Enum):
     COST                = "cost"
     SECURITY            = "security"
     INVENTORY           = "inventory"
+    AI_INVENTORY        = "ai_inventory" 
     MARKETPLACE         = "marketplace"
     TRUSTED_ADVISOR     = "trusted_advisor"
     HEALTH              = "health"
@@ -157,6 +159,7 @@ class AWSResourceInterface:
             "cost"				: self.data.cost,
             "security"			: self.data.security,
             "inventory"			: self.data.inventory,
+            "ai_inventory"		: self.data.ai_inventory,
             "marketplace"		: self.data.marketplace,
             "trusted_advisor"	: self.data.trusted_advisor,
             "health"			: self.data.health,
@@ -248,6 +251,14 @@ class AWSBoto3Permissions:
                 "params": params,
                 "status": False,
                 "reqd"  : True
+            },
+            "securityhub_v2": {
+                "name": "Security Hub v2",
+                "client": boto3.client("securityhub", region_name=REGION, config=self.boto3_config),
+                "action": "get_findings_v2",
+                "params": params,
+                "status": False,
+                "reqd"  : False
             },
             "resiliencehub": {
                 "name": "Resilience Hub",
@@ -1061,12 +1072,16 @@ class AWSResourceManager:
                             'cloudtrail'            : [],
                             'secrets_manager'       : [],
                             'certificate_manager'   : [],
-                            'inspector'             : []
+                            'inspector'             : [],
+                            'exposures'             : [],
+                            'threats'               : [],
+                            'standards'             : []
                         }
             
             # Fetch all security services in parallel
             security_tasks  =   {
                                     'security_hub'          : self.get_security_hub,
+                                    'security_v2'           : self.get_security_hub_v2,
                                     'guard_duty'            : self.get_guard_duty_security,
                                     'kms'                   : self.get_kms_security,
                                     'waf'                   : self.get_waf_security,
@@ -1077,7 +1092,7 @@ class AWSResourceManager:
                                     'inspector'             : self.get_inspector
                                 }
             
-            with ThreadPoolExecutor(max_workers=9) as executor:
+            with ThreadPoolExecutor(max_workers=11) as executor:
                 futures = {executor.submit(func): key for key, func in security_tasks.items()}
                 for future in as_completed(futures):
                     key = futures[future]
@@ -1086,7 +1101,10 @@ class AWSResourceManager:
                     except Exception as e:
                         #print(f"Error fetching {key}: {str(e)}")
                         result[key] = []
-            
+            # get_security_hub_v2 returns {exposures, threats, standards}; lift those to
+            # siblings of security_hub rather than nesting them under a 'security_v2' key.
+            result.update(result.pop('security_v2', {}) or {})
+
             self.data.set_data(attr=AWSResourceType.SECURITY, data=result)
             self.set_log(def_type=AWSResourceType.SECURITY, status="Pass")
             return result
@@ -1125,11 +1143,20 @@ class AWSResourceManager:
             }
 
             for query_type in ['created', 'updated']:
-                # Query 2: Get findings UPDATED today whichw as either, RESOLVED, NOTIFIED or SUPPRESSED
+                # Query 2: Get findings UPDATED today, whatever their workflow status.
+                # NEW is included deliberately. Security Hub control checks re-evaluate
+                # continuously, which bumps UpdatedAt while CreatedAt and WorkflowStatus
+                # stay put, so a control-heavy account has a day's activity sitting on
+                # findings that are still NEW and were created months ago. Query 1 misses
+                # them because it keys on CreatedAt, and leaving NEW out here missed them
+                # too, which returned an empty security_hub for accounts that had
+                # thousands of open findings. _process_finding skips a finding_id it has
+                # already seen, so the overlap with query 1 dedupes rather than double counts
                 if query_type == 'updated':
                     params['Filters'].pop('CreatedAt')
                     params['Filters']['UpdatedAt']      = [ {'Start': self.start_date.isoformat() if self.start_date else '', 'End': self.end_date.isoformat() if self.end_date else ''}]
                     params['Filters']['WorkflowStatus'] = [
+                                                            {'Value': 'NEW', 'Comparison': 'EQUALS'},
                                                             {'Value': 'RESOLVED', 'Comparison': 'EQUALS'},
                                                             {'Value': 'NOTIFIED', 'Comparison': 'EQUALS'},
                                                             {'Value': 'SUPPRESSED', 'Comparison': 'EQUALS'}
@@ -1168,6 +1195,30 @@ class AWSResourceManager:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'security_hub': str(e)})
             return None
 
+    # Standard CVSS qualitative bands, shared by the ASFF and OCSF extractors
+    CVSS_BANDS = ((9.0, 'CRITICAL'), (7.0, 'HIGH'), (4.0, 'MEDIUM'), (0.1, 'LOW'))
+
+    @classmethod
+    def _severity_band(cls, score):
+        """Map a CVSS score onto its qualitative severity band."""
+        for threshold, label in cls.CVSS_BANDS:
+            if score >= threshold:
+                return label
+        return 'NONE'
+
+    # Shared by the OCSF extractor and the native Inspector one further down
+    @staticmethod
+    def _as_float(value):
+        """Best-effort float, -1.0 when the value is missing or not numeric.
+
+        A single sentinel below every real CVSS score, so a missing field simply sorts last
+        instead of needing a separate presence check at each call site.
+        """
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return -1.0
+
     def _process_finding(self, finding, service_findings):
         finding_id = finding.get('Id')
         
@@ -1200,6 +1251,12 @@ class AWSResourceManager:
             service_findings[service]['open_findings'] += 1
         
         resource = finding.get('Resources', [{}])[0]
+
+        # No CVSS here on purpose. Security Hub aggregates Inspector, so the only ASFF
+        # findings carrying a Vulnerabilities array are Inspector's own, and those are
+        # already collected first-hand by get_inspector straight from inspector2 where the
+        # scoring is richer. Scoring them here as well put the same vulnerability in two
+        # tables. CVSS belongs to get_inspector and get_security_hub_v2 only
         service_findings[service]['findings'].append({
                                                         'finding_id'        : finding.get('Id'),
                                                         'service'           : resource.get('Type'),
@@ -1222,7 +1279,7 @@ class AWSResourceManager:
                                                         'generator_id'      : finding.get('GeneratorId'),
                                                         'generator'         : finding.get('ProductName', '')
                                                     })
-       
+
     #Getting from Guard Duty
     def get_guard_duty_security(self):
         """Get GuardDuty threat findings within date range"""
@@ -1315,44 +1372,64 @@ class AWSResourceManager:
     def get_kms_security(self):
         """Get KMS key security information within date range"""
         try:
-            kms = boto3.client('kms', region_name=REGION)
-            kms_data = []
-            
+            kms_data    = []
+            seen_keys   = set()
+
             # Ensure dates are set
             if not self.start_date or not self.end_date:
                 self.get_date()
-            
-            keys = AWSResponse(kms.list_keys())
-            for key in keys.data.get('Keys', []):
-                key_id = key.get('KeyId')
-                try:
-                    key_details     = AWSResponse(kms.describe_key(KeyId=key_id))
-                    key_metadata    = key_details.data.get('KeyMetadata', {})
-                    creation_date   = key_metadata.get('CreationDate')
-                    
-                    # Filter keys created within date range
-                    #if creation_date and self.start_date <= creation_date.replace(tzinfo=None) <= self.end_date:
-                    try:
-                        rotation_enabled = AWSResponse(kms.get_key_rotation_status(KeyId=key_id)).data.get('KeyRotationEnabled', False)
-                    except ClientError as e:
-                        if e.response['Error']['Code'] == 'AccessDeniedException':
-                            rotation_enabled = True  # Mark as unknown
-                        else:
-                            raise
 
-                    kms_data.append({
-                                        'key_id'                : key_id,
-                                        'arn'                   : key_metadata.get('Arn'),
-                                        'description'           : key_metadata.get('Description'),
-                                        'key_usage'             : key_metadata.get('KeyUsage'),
-                                        'key_state'             : key_metadata.get('KeyState'),
-                                        'creation_date'         : creation_date,
-                                        'enabled'               : key_metadata.get('Enabled'),
-                                        'key_rotation_enabled'  : rotation_enabled
-                                    })
-                except Exception as e:
-                    print(f"Error processing KMS key {key_id}: {str(e)}")
-                    continue
+            # #1: Collect from the working region AND us-east-1 (where CloudFront/
+            # global-service KMS keys are homed). Using a set avoids a duplicate
+            # pass when REGION already is us-east-1.
+            for region in {REGION, 'us-east-1'}:
+                kms = boto3.client('kms', region_name=region)
+
+                # #3: Paginate - list_keys returns max 100 keys per call.
+                marker = None
+                while True:
+                    keys = AWSResponse(kms.list_keys(Marker=marker)) if marker else AWSResponse(kms.list_keys())
+
+                    for key in keys.data.get('Keys', []):
+                        key_id = key.get('KeyId')
+                        if key_id in seen_keys:   # skip if already collected in another region
+                            continue
+                        seen_keys.add(key_id)
+                        try:
+                            key_details     = AWSResponse(kms.describe_key(KeyId=key_id))
+                            key_metadata    = key_details.data.get('KeyMetadata', {})
+                            creation_date   = key_metadata.get('CreationDate')
+
+                            # Filter keys created within date range
+                            #if creation_date and self.start_date <= creation_date.replace(tzinfo=None) <= self.end_date:
+                            try:
+                                rotation_enabled = AWSResponse(kms.get_key_rotation_status(KeyId=key_id)).data.get('KeyRotationEnabled', False)
+                            except ClientError as e:
+                                if e.response['Error']['Code'] == 'AccessDeniedException':
+                                    rotation_enabled = True  # Mark as unknown
+                                else:
+                                    raise
+
+                            kms_data.append({
+                                                'key_id'                : key_id,
+                                                'arn'                   : key_metadata.get('Arn'),
+                                                'description'           : key_metadata.get('Description'),
+                                                'key_usage'             : key_metadata.get('KeyUsage'),
+                                                'key_state'             : key_metadata.get('KeyState'),
+                                                'creation_date'         : creation_date,
+                                                'enabled'               : key_metadata.get('Enabled'),
+                                                'key_rotation_enabled'  : rotation_enabled
+                                            })
+                        except Exception as e:
+                            print(f"Error processing KMS key {key_id} in {region}: {str(e)}")
+                            self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'kms': str(e)})
+                            continue
+
+                    # #3: Stop when AWS says there are no more pages.
+                    if not keys.data.get('Truncated'):
+                        break
+                    marker = keys.data.get('NextMarker')
+
             return kms_data
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'kms': str(e)})
@@ -1556,7 +1633,773 @@ class AWSResourceManager:
             return vendor in ['AWS', 'Amazon']
         
         return statement_type in compliant_types
-      
+
+
+
+
+
+    # Categories fetched for the V2 dashboard. Security Hub 2.0
+    
+    # fetched to resolve AI-resource finding links (they're all Compliance Findings).
+    V2_CATEGORIES   = {'posture'   : 'Compliance Finding'}
+    # Severities collected, matching get_security_hub's SeverityLabel filter
+    SEVERITY_LABELS = ('Critical', 'High', 'Medium', 'Low')
+    # Workflow states counted as resolved; anything else counts as open
+    RESOLVED_STATES = ('RESOLVED', 'SUPPRESSED')
+    # Active means still open: New or Notified. Resolved/Suppressed are filtered out at the
+    # API so a dashboard of exposures/threats never shows something already dealt with
+    ACTIVE_STATUSES = ('New', 'Notified')
+
+    # A CVE almost always carries several cvss entries - the same CVE scored by different
+    # vendors (Amazon Linux, NVD, MITRE) under different versions. Inspector reconciles these
+    # into one number, adjusted_score, and derives the finding severity from it. Every entry
+    # on a CVE repeats the same adjusted_score.
+    #
+    # Ranking on adjusted_score keeps our reported score consistent with the severity the
+    # console shows. Measured against 600 live OCSF Inspector findings, max(adjusted_score)
+    # matched the finding severity band 599/599 times (one finding had no adjusted_score),
+    # whereas preferring the newest CVSS version matched only 537/600 - version 4.0
+    # frequently scores lower than 3.1 for the same CVE, so a High finding was being
+    # reported as Medium.
+    @classmethod
+    def _cvss_rank(cls, cvss):
+        """Sort key for one OCSF cvss entry. Prefers Inspector's reconciled adjusted_score,
+        falling back to base_score when absent, then to the newer CVSS version."""
+        # A 4.0 entry breaks ties toward the more current scoring system, but only after
+        # adjusted_score and base_score have failed to separate the entries
+        return (
+            cls._as_float(cvss.get('adjusted_score')),
+            cls._as_float(cvss.get('base_score')),
+            str(cvss.get('version', ''))
+        )
+
+    def _extract_cvss(self, finding):
+        """Pull CVSS scoring out of an OCSF finding.
+
+        Only Vulnerability Findings carry a vulnerabilities[] array, so this returns all empty
+        values for exposures, compliance and threat findings. Path is vulnerabilities[].cve.cvss[]
+        - both levels are arrays because one finding can cover several CVEs and each CVE is
+        scored by several vendors under several versions.
+
+        Per CVE the winning entry is chosen by _cvss_rank (Inspector's adjusted_score), and the
+        reported score is the worst CVE on the finding, so a single number can be used to rank
+        findings. cve_count records how many CVEs were present, so a high-count finding is not
+        mistaken for a single-CVE one.
+        """
+        empty = {
+                    'cve_id'        : '',
+                    'cvss_score'    : None,
+                    'cvss_severity' : '',
+                    'cvss_version'  : '',
+                    'cvss_vector'   : '',
+                    'epss_score'    : None,
+                    'cve_count'     : 0
+                }
+
+        vulnerabilities = finding.get('vulnerabilities') or []
+        if not isinstance(vulnerabilities, list):
+            return empty
+
+        scored = []
+
+        for vulnerability in vulnerabilities:
+            if not isinstance(vulnerability, dict):
+                continue
+
+            cve         = vulnerability.get('cve') or {}
+            cvss_list   = [c for c in (cve.get('cvss') or []) if isinstance(c, dict)]
+            if not cvss_list:
+                continue
+
+            best = max(cvss_list, key=self._cvss_rank)
+
+            # adjusted_score is Inspector's reconciliation of the vendor scores and is what the
+            # finding severity is derived from, so it is the score we report. base_score is the
+            # fallback for a CVE that has not been reconciled
+            score = self._as_float(best.get('adjusted_score'))
+            if score < 0:
+                score = self._as_float(best.get('base_score'))
+            if score < 0:
+                continue
+
+            epss = cve.get('epss') or {}
+            epss_score = self._as_float(epss.get('score'))
+
+            scored.append({
+                            'cve_id'        : cve.get('uid', ''),
+                            'cvss_score'    : score,
+                            'cvss_severity' : self._severity_band(score),
+                            'cvss_version'  : str(best.get('version', '')),
+                            'cvss_vector'   : best.get('adjusted_vector_string') or best.get('vector_string', ''),
+                            'epss_score'    : epss_score if epss_score >= 0 else None
+                          })
+
+        if not scored:
+            # vulnerabilities[] present but unscored, still report the CVE count
+            return {**empty, 'cve_count': len(vulnerabilities)}
+
+        worst = max(scored, key=lambda s: s['cvss_score'])
+
+        return {**worst, 'cve_count': len(vulnerabilities)}
+
+    # A related_event whose type is not 'Finding' is a resource-configuration observation
+    # rather than a real finding. It has no separate finding record to resolve - its uid is the
+    # resource id (e.g. "i-0efbe278eefa53589") - so it contributes traits only.
+    RELATED_EVENT_FINDING_TYPE = 'Finding'
+
+    @classmethod
+    def _extract_traits(cls, related_event):
+        """Flatten one related_event's traits[] into the fields stored per contributor.
+
+        Traits are why an exposure exists: each names a specific weakness that contributed to
+        it (e.g. "The EC2 instance has software vulnerabilities"), classified by category
+        (Vulnerability, Misconfiguration, Impact, Assumability). trait_type separates a
+        Contributing Trait, which is part of the causal chain, from a Contextual Trait, which
+        only describes the surrounding resource.
+
+        Note the live API returns these under `traits` with a `category`/`name`/`type` shape.
+        The published sample finding shows an older `tags` shape with `name`/`values`, so both
+        are read.
+        """
+        traits = related_event.get('traits')
+
+        if isinstance(traits, list) and traits:
+            entries = [
+                {
+                    'category'  : str(t.get('category', '')),
+                    'name'      : str(t.get('name', '')),
+                    'type'      : str(t.get('type', ''))
+                }
+                for t in traits if isinstance(t, dict)
+            ]
+        else:
+            # Older documented shape: tags[] of {name, values[]}, where name is the category
+            entries = [
+                {
+                    'category'  : str(tag.get('name', '')),
+                    'name'      : str(value),
+                    'type'      : 'Contributing Trait'
+                }
+                for tag in (related_event.get('tags') or []) if isinstance(tag, dict)
+                for value in (tag.get('values') or [])
+            ]
+
+        return cls._trait_fields(entries)
+
+    @staticmethod
+    def _trait_fields(entries):
+        """Derive the stored trait columns from a list of trait dicts.
+
+        Separate from _extract_traits so _merge_contributed can recompute them after unioning
+        the traits of two events that share a uid.
+        """
+        contributing = [e for e in entries if e['type'] != 'Contextual Trait']
+
+        # Categories of the contributing traits only, so a Vulnerability label always means
+        # this contributor actually carried the vulnerability
+        categories = sorted({e['category'] for e in contributing if e['category']})
+
+        return {
+                    'trait_count'       : len(entries),
+                    'trait_categories'  : ', '.join(categories),
+                    'trait_names'       : ' | '.join(e['name'] for e in entries if e['name']),
+                    'traits'            : entries
+                }
+
+    def get_security_hub_v2(self):
+        """Fetch the Security Hub V2 unified dashboard (OCSF) via GetFindingsV2.
+
+        No date filter: V2 exposures and threats are long-lived correlated findings
+        representing current state, not point-in-time events. A DAILY window returns zero.
+        Returns {exposures, threats, standards} for merging into get_security's result, each
+        a flat list of findings (exposures/threats) or standard scores.
+        """
+        try:
+            securityhub = boto3.client('securityhub', region_name=REGION)
+            categories  = {}
+
+            for category_key, class_name in self.V2_CATEGORIES.items():
+                categories[category_key] = self._fetch_findings_v2(securityhub, category_key, class_name, [
+                    {
+                        'FieldName' : 'class_name',
+                        'Filter'    : {'Value': class_name, 'Comparison': 'EQUALS'}
+                    }
+                ])
+
+            # Exposures and threats are both Detection Findings, split by finding_info.types:
+            # exposures carry the PREFIX 'Exposure', threats are everything else in the class
+            # (product 'Security Hub Exposure Detection' vs. e.g. GuardDuty-sourced detections).
+            categories['exposures'] = self._get_exposures(securityhub)
+            categories['threats']   = self._fetch_findings_v2(securityhub, 'threats', 'Detection Finding', [
+                {
+                    'FieldName' : 'class_name',
+                    'Filter'    : {'Value': 'Detection Finding', 'Comparison': 'EQUALS'}
+                },
+                {
+                    'FieldName' : 'finding_info.types',
+                    'Filter'    : {'Value': 'Exposure', 'Comparison': 'PREFIX_NOT_EQUALS'}
+                }
+            ])
+
+            ai_inventory = self._get_ai_inventory(securityhub)
+
+            # Resolve related-event uids into contributed_finding, and attach findings to
+            # each AI resource by resource_id.
+            self._link_findings_to_root(categories, ai_inventory, securityhub)
+
+            standards = self._get_security_standards(securityhub)
+
+            self.data.set_data(attr=AWSResourceType.AI_INVENTORY, data=ai_inventory)
+
+            return {
+                'exposures' : [f for service in categories['exposures'].values() for f in service['findings']],
+                'threats'   : [f for service in categories['threats'].values()   for f in service['findings']],
+                'standards' : standards
+            }
+
+        except Exception as e:
+            self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'security_hub_v2': str(e)})
+            return {}
+
+    def _fetch_findings_v2(self, securityhub, category_key, class_name, category_filters):
+        """Accumulate findings for one category into a {service: service_entry} dict via
+        _process_finding_v2. Severity gets its own OR composite filter so the four labels
+        act as a set (GetFindingsV2 caps one filter type at 20 per composite filter)."""
+        service_findings = {}
+        next_token       = None
+
+        params = {
+            'Filters': {
+                'CompositeFilters': [
+                    {
+                        'StringFilters' : [
+                            {
+                                'FieldName' : 'cloud.account.uid',
+                                'Filter'    : {'Value': self.account_id, 'Comparison': 'EQUALS'}
+                            }
+                        ] + category_filters,
+                        'Operator'      : 'AND'
+                    },
+                    {
+                        'StringFilters' : [
+                            {'FieldName': 'severity', 'Filter': {'Value': sev, 'Comparison': 'EQUALS'}}
+                            for sev in self.SEVERITY_LABELS
+                        ],
+                        'Operator'      : 'OR'
+                    },
+                    {
+                        'StringFilters' : [
+                            {'FieldName': 'status', 'Filter': {'Value': status, 'Comparison': 'EQUALS'}}
+                            for status in self.ACTIVE_STATUSES
+                        ],
+                        'Operator'      : 'OR'
+                    }
+                ],
+                'CompositeOperator': 'AND'
+            },
+            'MaxResults': 100
+        }
+
+        while True:
+            if next_token:
+                params['NextToken'] = next_token
+
+            response = AWSResponse(securityhub.get_findings_v2(**params))
+            if response.status != 200:
+                break
+
+            for finding in response.data.get('Findings', []):
+                self._process_finding_v2(finding, service_findings, category_key, class_name)
+
+            next_token = response.data.get('NextToken')
+            if not next_token:
+                break
+
+        return service_findings
+    
+    def _get_exposures(self, securityhub):
+        """Fetch exposure findings. These are Detection Findings where finding_info.types PREFIX 'Exposure'.
+        Product name is 'Security Hub Exposure Detection'. Uses the same two-pass window as every category."""
+        try:
+            return self._fetch_findings_v2(securityhub, 'exposures', 'Exposure', [
+                {
+                    'FieldName' : 'finding_info.types',
+                    'Filter'    : {'Value': 'Exposure', 'Comparison': 'PREFIX'}
+                }
+            ])
+
+        except Exception as e:
+            print(f"{FAIL} Exposures: {e}")
+            return {}
+
+    def _get_security_standards(self, securityhub):
+        """Fetch enabled security standards with passed/failed counts and compliance score.
+        Uses get_enabled_standards + get_findings v1 with ComplianceAssociatedStandardsId (short form)."""
+        try:
+            standards = []
+
+            # Step 1: Get all enabled standards
+            paginator_params = {}
+            subscriptions = []
+
+            while True:
+                response = AWSResponse(securityhub.get_enabled_standards(**paginator_params))
+                if response.status != 200:
+                    break
+
+                subscriptions.extend(response.data.get('StandardsSubscriptions', []))
+
+                next_token = response.data.get('NextToken')
+                if not next_token:
+                    break
+                paginator_params['NextToken'] = next_token
+
+            # Step 2: For each standard, count passed/failed controls
+            for subscription in subscriptions:
+                standards_sub_arn   = subscription.get('StandardsSubscriptionArn', '')
+                standards_arn       = subscription.get('StandardsArn', '')
+                standards_status    = subscription.get('StandardsStatus', '')
+
+                # Parse a readable name from the ARN
+                if 'standards/' in standards_arn:
+                    standard_name = standards_arn.split('standards/')[-1]
+                elif 'ruleset/' in standards_arn:
+                    standard_name = standards_arn.split('ruleset/')[-1]
+                else:
+                    standard_name = standards_arn.split('/')[-1] if standards_arn else ''
+
+                passed  = 0
+                failed  = 0
+
+                # Derive the short-form standards ID used in AssociatedStandards
+                # Full ARN: arn:aws:securityhub:us-east-1::standards/aws-foundational-security-best-practices/v/1.0.0
+                # Short form: standards/aws-foundational-security-best-practices/v/1.0.0
+                # Full ARN: arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0
+                # Short form: ruleset/cis-aws-foundations-benchmark/v/1.2.0
+                if 'standards/' in standards_arn:
+                    short_id = 'standards/' + standards_arn.split('standards/')[-1]
+                elif 'ruleset/' in standards_arn:
+                    short_id = 'ruleset/' + standards_arn.split('ruleset/')[-1]
+                else:
+                    short_id = standards_arn
+
+                # Count PASSED and FAILED using v1 get_findings with short-form ID
+                for comp_status in ['PASSED', 'FAILED']:
+                    count       = 0
+                    next_token  = None
+
+                    while True:
+                        find_params = {
+                            'Filters': {
+                                'ComplianceStatus'                  : [{'Value': comp_status, 'Comparison': 'EQUALS'}],
+                                'ComplianceAssociatedStandardsId'   : [{'Value': short_id, 'Comparison': 'EQUALS'}],
+                                'RecordState'                       : [{'Value': 'ACTIVE', 'Comparison': 'EQUALS'}]
+                            },
+                            'MaxResults': 100
+                        }
+                        if next_token:
+                            find_params['NextToken'] = next_token
+
+                        try:
+                            find_resp = AWSResponse(securityhub.get_findings(**find_params))
+                            if find_resp.status != 200:
+                                break
+                            count += len(find_resp.data.get('Findings', []))
+                            next_token = find_resp.data.get('NextToken')
+                            if not next_token:
+                                break
+                        except Exception:
+                            break
+
+                    if comp_status == 'PASSED':
+                        passed = count
+                    else:
+                        failed = count
+
+                total = passed + failed
+                score = round((passed / max(total, 1)) * 100) if total > 0 else 0
+
+                standards.append({
+                    'standard_name'     : standard_name,
+                    'standard_arn'      : standards_arn,
+                    'subscription_arn'  : standards_sub_arn,
+                    'status'            : standards_status,
+                    'passed'            : passed,
+                    'failed'            : failed,
+                    'score'             : score,
+                    # Stamped here, not derived by the receiver, so the score trend is keyed
+                    # to the window this run actually measured rather than the write time
+                    'date_from'         : self.start_date.strftime('%Y-%m-%d') if self.start_date else '',
+                    'date_to'           : self.end_date.strftime('%Y-%m-%d') if self.end_date else ''
+                })
+
+            return standards
+
+        except Exception as e:
+            return [{'error': str(e)}]
+
+    # Workflow states counted as resolved; anything else counts as open (legacy parity)
+    RESOLVED_STATES = ('RESOLVED', 'SUPPRESSED')
+
+    # A threat finding has no CVE, so CVSS is meaningless here (measured live: 0 of the
+    # GuardDuty-sourced Detection Findings pulled for this account carry vulnerabilities[]).
+    # What GuardDuty actually reports instead: the specific finding type (finding_info.types
+    # holds ['Threats', '<GuardDuty type>'], the real signal is the second element), how the
+    # finding was detected (finding_info.analytic.type - e.g. 'Behavioral', 'Rule'), who did it
+    # (resources[0].user - AWS credentials are the resource for an IAM-behavior finding), what
+    # they did (evidences[0].api - operation and service), where from
+    # (evidences[0].src_endpoint - ip and country), and how often (top-level count).
+    def _extract_threat_signals(self, finding):
+        finding_info    = finding.get('finding_info', {})
+        resource        = (finding.get('resources') or [{}])[0]
+        actor           = resource.get('user') or {}
+        evidence        = (finding.get('evidences') or [{}])[0]
+        api             = evidence.get('api') or {}
+        endpoint        = evidence.get('src_endpoint') or evidence.get('dst_endpoint') or {}
+        location        = endpoint.get('location') or {}
+        types           = finding_info.get('types') or []
+
+        return {
+                    'finding_type'      : next((t for t in types if t != 'Threats'), ''),
+                    'analytic_type'     : finding_info.get('analytic', {}).get('type', ''),
+                    'actor_name'        : actor.get('name', ''),
+                    'actor_uid'         : actor.get('uid_alt', actor.get('uid', '')),
+                    'api_operation'     : api.get('operation', ''),
+                    'api_service'       : (api.get('service') or {}).get('name', ''),
+                    'source_ip'         : endpoint.get('ip', ''),
+                    'source_country'    : location.get('country', ''),
+                    'count'             : finding.get('count', 0)
+                }
+
+    def _process_finding_v2(self, finding, service_findings, category_key, class_name):
+        """Accumulate one OCSF-formatted finding from GetFindingsV2 into service_findings,
+        mirroring the legacy ASFF _process_finding. OCSF field names differ (metadata.uid,
+        finding_info.*, lowercase severity/status) but the grouping and counts are the same."""
+        finding_info    = finding.get('finding_info', {})
+        metadata        = finding.get('metadata', {})
+        product         = metadata.get('product', {})
+        resources       = finding.get('resources', [{}])
+        resource        = resources[0] if resources else {}
+        remediation     = finding.get('remediation', {})
+        compliance      = finding.get('compliance', {})
+        related_events  = finding_info.get('related_events', [])
+
+        # metadata.uid is the internal correlation hash; finding_info.uid is the console ARN
+        finding_id = metadata.get('uid', '')
+
+        # Skip if already processed (the created/updated passes overlap)
+        for service_data in service_findings.values():
+            if any(f['finding_id'] == finding_id for f in service_data['findings']):
+                return
+
+        service = product.get('name', '')
+        if service not in service_findings:
+            service_findings[service]   =   {
+                                                'service'           : service,
+                                                'category'          : category_key,
+                                                'class_name'        : class_name,
+                                                'total_findings'    : 0,
+                                                'severity_counts'   : {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFORMATIONAL': 0},
+                                                'open_findings'     : 0,
+                                                'resolved_findings' : 0,
+                                                'findings'          : []
+                                            }
+
+        service_findings[service]['total_findings'] += 1
+
+        # OCSF severity/status are title-case ('Medium', 'New'); upper-case them so the counts
+        # and the open/resolved split read like the legacy ASFF labels.
+        severity        = finding.get('severity', 'UNKNOWN').upper()
+        workflow_status = finding.get('status', '').upper()
+
+        if severity in service_findings[service]['severity_counts']:
+            service_findings[service]['severity_counts'][severity] += 1
+
+        if workflow_status in self.RESOLVED_STATES:
+            service_findings[service]['resolved_findings'] += 1
+        else:
+            service_findings[service]['open_findings'] += 1
+
+        base_finding = {
+                            'finding_id'        : finding_id,
+                            'finding_arn'       : finding_info.get('uid', ''),
+                            'service'           : resource.get('type', ''),
+                            'title'             : finding_info.get('title', ''),
+                            'description'       : finding_info.get('desc', ''),
+                            'severity'          : severity,
+                            'status'            : workflow_status or 'OPEN',
+                            'resource_type'     : resource.get('type', ''),
+                            'resource_id'       : resource.get('uid', ''),
+                            'created_at'        : finding_info.get('created_time_dt', ''),
+                            'updated_at'        : finding_info.get('modified_time_dt', ''),
+                            'recommendation'    : remediation.get('desc', ''),
+                            'region'            : resource.get('region', ''),
+                            'workflow_state'    : workflow_status,
+                            'record_state'      : finding.get('status', ''),
+                            'product_name'      : product.get('name', ''),
+                            'company_name'      : product.get('vendor_name', ''),
+                            'product_arn'       : product.get('uid', ''),
+                            'generator_id'      : finding_info.get('uid', ''),
+                            'generator'         : product.get('name', ''),
+                            # Temp related-event list consumed by _link_findings_to_root to
+                            # build contributed_finding, then discarded. Carries the traits
+                            # and the uid, which matches the finding_id of a finding in
+                            # another category.
+                            '_related_events'   : [rel for rel in related_events if rel.get('uid')]
+                        }
+
+        if category_key == 'threats':
+            base_finding.update(self._extract_threat_signals(finding))
+        else:
+            # CVSS scoring, only populated for Vulnerability Findings
+            base_finding['compliance_status'] = compliance.get('status', '')
+            base_finding.update(self._extract_cvss(finding))
+
+        service_findings[service]['findings'].append(base_finding)
+
+    # Fields carried from a contributing finding onto the exposure's contributed_finding entry.
+    # CVSS rides along because the contributors are mostly Inspector vulnerability findings,
+    # which is the only category that carries a score. The exposure itself never has one.
+    CONTRIBUTED_FIELDS = (
+        'finding_id', 'finding_arn',
+        'cve_id', 'cvss_score', 'cvss_severity', 'cvss_version', 'cvss_vector',
+        'epss_score', 'cve_count'
+    )
+
+    @classmethod
+    def _contributed_ref(cls, finding):
+        """Reduce a finding to the reference stored in contributed_finding."""
+        return {k: finding.get(k) for k in cls.CONTRIBUTED_FIELDS}
+
+    def _link_findings_to_root(self, categories, ai_resources, securityhub):
+        """Resolve each exposure/threat's related events into a `contributed_finding` array, and
+        attach finding refs to each AI resource by matching resource_id.
+
+        Each contributed_finding entry is the union of two things: the traits carried on the
+        related event itself (always present, and the reason the exposure exists), and the
+        referenced finding's own detail including CVSS (present only when the related event is a
+        real Finding that we could resolve). The temp _related_events field written by
+        _process_finding_v2 is consumed here and stripped from all findings."""
+        all_findings = [
+            f
+            for service_findings in categories.values()
+            for service in service_findings.values()
+            for f in service.get('findings', [])
+        ]
+
+        index = {f['finding_id']: self._contributed_ref(f) for f in all_findings}
+
+        # Contributors excluded by this run's severity/date/class filters (e.g. Informational
+        # compliance findings, or ones created before the window) are not in the index, so look
+        # those up directly to keep contributed_finding complete. Only real Findings are worth
+        # resolving - a ResourceConfiguration uid is a resource id and matches nothing.
+        missing_uids = {
+            rel['uid']
+            for f in all_findings
+            for rel in f.get('_related_events', [])
+            if rel.get('type') == self.RELATED_EVENT_FINDING_TYPE and rel['uid'] not in index
+        }
+        index.update(self._resolve_finding_refs(securityhub, missing_uids))
+
+        for f in all_findings:
+            related_events = f.pop('_related_events', [])
+            if not related_events:
+                continue
+
+            # Keyed by uid because one contributor can arrive as several related_events -
+            # Security Hub splits an IAM user's Contributing and Contextual traits into two
+            # events sharing one uid. Their non-trait fields are identical, so the entries are
+            # merged and the trait lists concatenated, which keeps uid unique per exposure and
+            # lets the receiver key the matrix on it.
+            contributed = {}
+
+            for rel in related_events:
+                uid = rel['uid']
+
+                # Traits describe the contribution and are always available. The resolved
+                # finding supplies CVSS and the console ARN, and is absent for a
+                # ResourceConfiguration or a finding outside this account's retention.
+                #
+                # status/workflow_state are stamped 'NEW' at emission time. Security Hub does
+                # not carry a per-contributor status - a contributor is either present in
+                # this run (active) or absent (resolved by the receiver's NOT EXISTS check).
+                # Emitting NEW here means the receiver upsert overwrites any prior RESOLVED
+                # value when the contributor comes back, so a resurfaced finding does not
+                # stay stuck as RESOLVED. Without this the receiver's upsert path leaves
+                # both columns untouched because the payload does not carry them
+                entry = {
+                            'finding_id'    : uid,
+                            'finding_arn'   : '',
+                            'source'        : (rel.get('product') or {}).get('name', ''),
+                            'title'         : rel.get('title', ''),
+                            'is_finding'    : rel.get('type') == self.RELATED_EVENT_FINDING_TYPE,
+                            'resource_uid'  : next(
+                                                (o.get('value', '') for o in (rel.get('observables') or [])
+                                                 if isinstance(o, dict) and o.get('value')),
+                                                ''
+                                              ),
+                            'status'        : 'NEW',
+                            'workflow_state': 'NEW',
+                            **self._extract_cvss({}),
+                            **self._extract_traits(rel)
+                        }
+                entry.update({k: v for k, v in index.get(uid, {}).items() if v not in (None, '')})
+
+                if uid in contributed:
+                    contributed[uid] = self._merge_contributed(contributed[uid], entry)
+                else:
+                    contributed[uid] = entry
+
+            f['contributed_finding'] = list(contributed.values())
+
+        # AI inventory: findings reference their resource by the same short-form resource_id
+        # used in ai_inventory (e.g. "gateway-quick-start-f3d764-axpqf6sqss"), not the full ARN.
+        refs_by_resource = {}
+        for f in all_findings:
+            refs_by_resource.setdefault(f.get('resource_id'), []).append(self._contributed_ref(f))
+
+        for resource in ai_resources:
+            resource_id = resource.get('resource_id', '')
+            # Child resources (e.g. GatewayTarget) use a composite id "<parent_id>|<child_id>".
+            # Security Hub findings are only raised against the parent, so fall back to it.
+            parent_id = resource_id.split('|', 1)[0]
+            resource['finding'] = (
+                refs_by_resource.get(resource_id)
+                or refs_by_resource.get(parent_id, [])
+            )
+
+    @classmethod
+    def _merge_contributed(cls, first, second):
+        """Fold two contributed entries that share a uid into one, unioning their traits.
+
+        Only the trait fields are recomputed. Every other field is taken from whichever entry
+        has a value, because the duplicate events describe the same contributor and so agree
+        on everything except the traits they carry.
+        """
+        traits = first['traits'] + [t for t in second['traits'] if t not in first['traits']]
+
+        merged = {**second, **{k: v for k, v in first.items() if v not in (None, '', 0, [])}}
+        merged.update(cls._trait_fields(traits))
+
+        return merged
+
+    # GetFindingsV2 rejects more than 20 filters of one type in a single composite filter
+    UID_LOOKUP_BATCH = 20
+
+    def _resolve_finding_refs(self, securityhub, uids):
+        """Look up findings by metadata.uid, in batches, and return {uid: contributed ref}.
+        Used for referenced findings that this run's category filters didn't collect."""
+        resolved = {}
+        uids     = list(uids)
+
+        for offset in range(0, len(uids), self.UID_LOOKUP_BATCH):
+            batch = uids[offset:offset + self.UID_LOOKUP_BATCH]
+
+            params = {
+                'Filters': {
+                    'CompositeFilters': [
+                        {
+                            'StringFilters' : [
+                                {'FieldName': 'metadata.uid', 'Filter': {'Value': uid, 'Comparison': 'EQUALS'}}
+                                for uid in batch
+                            ],
+                            'Operator'      : 'OR'
+                        }
+                    ],
+                    'CompositeOperator': 'AND'
+                },
+                'MaxResults': 100
+            }
+
+            try:
+                response = AWSResponse(securityhub.get_findings_v2(**params))
+                if response.status != 200:
+                    continue
+
+                for finding in response.data.get('Findings', []):
+                    finding_id = finding.get('metadata', {}).get('uid', '')
+                    # Contributors resolved here bypass _process_finding_v2, so extract CVSS
+                    # directly off the raw OCSF record. Most exposure contributors are
+                    # Inspector vulnerability findings that arrive via this path.
+                    resolved[finding_id] = {
+                        'finding_id'    : finding_id,
+                        'finding_arn'   : finding.get('finding_info', {}).get('uid', ''),
+                        **self._extract_cvss(finding)
+                    }
+
+            except Exception:   # nosec B112
+                continue        # nosec B112
+
+        return resolved
+
+    def _get_ai_inventory(self, securityhub):
+        """Fetch AI/ML resource inventory from Security Hub's GetResourcesV2 API"""
+        try:
+            ai_resources = []
+            next_token = None
+
+            params = {
+                'Filters': {
+                    'CompositeFilters': [
+                        {
+                            'StringFilters': [
+                                {
+                                    'FieldName'     : 'ResourceCategory',
+                                    'Filter'        : {'Value': 'AI/ML', 'Comparison': 'EQUALS'}
+                                },
+                                {
+                                    'FieldName'     : 'AccountId',
+                                    'Filter'        : {'Value': self.account_id, 'Comparison': 'EQUALS'}
+                                }
+                            ],
+                            'Operator': 'AND'
+                        }
+                    ],
+                    'CompositeOperator': 'AND'
+                },
+                'MaxResults': 100
+            }
+
+            while True:
+                if next_token:
+                    params['NextToken'] = next_token
+
+                response = AWSResponse(securityhub.get_resources_v2(**params))
+                if response.status != 200:
+                    break
+
+                for resource in response.data.get('Resources', []):
+                    ai_details = resource.get('ResourceInfo', {}).get('AIDetails', {})
+                    ai_resources.append({
+                        'resource_guid'         : resource.get('ResourceGuid', ''),
+                        'resource_id'           : resource.get('ResourceId', ''),
+                        'resource_name'         : resource.get('ResourceName', ''),
+                        'resource_type'         : resource.get('ResourceType', ''),
+                        'resource_category'     : resource.get('ResourceCategory', ''),
+                        'resource_sub_category' : resource.get('ResourceSubCategory', ''),
+                        'discovery_type'        : resource.get('DiscoveryType', ''),
+                        'region'                : resource.get('ResourceRegion', ''),
+                        'account_id'            : resource.get('AccountId', ''),
+                        'created_at'            : resource.get('ResourceCreationTimeDt', ''),
+                        'tags'                  : resource.get('ResourceTags', []),
+                        'host_resource_guid'    : ai_details.get('HostResourceGuid', ''),
+                        'host_resource_type'    : ai_details.get('HostResourceType', ''),
+                        'canonical_id'          : ai_details.get('CanonicalId', ''),
+                        'model_count'           : ai_details.get('SelfHostedAIModelResourceCount', 0),
+                        'agent_count'           : ai_details.get('SelfHostedAIAgentResourceCount', 0),
+                        'total_ai_count'        : ai_details.get('SelfHostedTotalAIResourceCount', 0)
+                    })
+
+                next_token = response.data.get('NextToken')
+                if not next_token:
+                    break
+
+            return ai_resources
+
+        except Exception as e:
+            print(f"{FAIL} AI Inventory: {e}")
+            return []
+    
     #3. Fetching data from Cloudtrail logs
     def get_cloudtrail_security(self):
         """Get CloudTrail security events within date range"""
@@ -1706,13 +2549,58 @@ class AWSResourceManager:
                                                 'description'       : finding.get('description'),
                                                 'first_observed_at' : first_observed,
                                                 'last_observed_at'  : last_observed,
-                                                'updated_at'        : updated_at
+                                                'updated_at'        : updated_at,
+                                                **self._extract_cvss_inspector(finding)
                                             })
-            
+
             return filtered_findings
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'inspector': str(e)})
             return []
+
+    def _extract_cvss_inspector(self, finding):
+        empty = {
+                    'cve_id'        : '',
+                    'cvss_score'    : None,
+                    'cvss_severity' : '',
+                    'cvss_version'  : '',
+                    'cvss_vector'   : '',
+                    'epss_score'    : None,
+                    'cve_count'     : 0
+                }
+
+        details = finding.get('packageVulnerabilityDetails') or {}
+        if not isinstance(details, dict) or not details:
+            return empty
+
+        cve_id      = details.get('vulnerabilityId') or ''
+        related     = details.get('relatedVulnerabilities') or []
+        cve_count   = (1 if cve_id else 0) + (len(related) if isinstance(related, list) else 0)
+
+        adjusted = (finding.get('inspectorScoreDetails') or {}).get('adjustedCvss') or {}
+
+        entries = [c for c in (details.get('cvss') or []) if isinstance(c, dict)]
+        chosen  = adjusted if adjusted.get('scoringVector') else (
+                      max(entries, key=lambda c: self._as_float(c.get('baseScore'))) if entries else {}
+                  )
+
+        score = self._as_float(finding.get('inspectorScore'))
+        if score < 0:
+            score = self._as_float(chosen.get('score', chosen.get('baseScore')))
+        if score < 0:
+            return {**empty, 'cve_id': cve_id, 'cve_count': cve_count}
+
+        epss = self._as_float((finding.get('epss') or {}).get('score'))
+
+        return {
+                    'cve_id'        : cve_id,
+                    'cvss_score'    : score,
+                    'cvss_severity' : self._severity_band(score),
+                    'cvss_version'  : str(chosen.get('version', '')),
+                    'cvss_vector'   : chosen.get('scoringVector', ''),
+                    'epss_score'    : epss if epss >= 0 else None,
+                    'cve_count'     : cve_count
+                }
 
     #7. Fetching data from Trusted Advisor
     def get_trusted_advisor(self):
@@ -2816,8 +3704,8 @@ if __name__ == "__main__":
     start   = None
     end     = None
 
-    start   = "06-03-2026"  # January 14, 2026
-    end     = "07-03-2026"  # January 21, 2026
+    start   = "23-07-2026"  # July 23, 2026
+    end     = "24-07-2026"  # July 24, 2026
 
     #result  = lambda_handler({"history":True, "start":start, "end":end})
     

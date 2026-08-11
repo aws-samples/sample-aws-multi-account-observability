@@ -1,7 +1,7 @@
 # Multi-Account Observability - View Reference Documentation
 
 ## Overview
-This document provides comprehensive attribute-level documentation for all 42 database views in the Multi-Account Observability solution. Each view enriches base table data with account metadata and product associations.
+This document provides comprehensive attribute-level documentation for all 48 database views in the Multi-Account Observability solution. Each view enriches base table data with account metadata and product associations.
 
 ## Common Attributes
 All views (except view_products) include these standard attributes:
@@ -1060,6 +1060,242 @@ Same as view_products plus all common account attributes.
 
 ---
 
+## 43. view_exposure_findings
+**Purpose**: Security Hub V2 exposures — one row per correlated exposure  
+**Base Table**: exposure_findings  
+**Use Case**: Exposure triage, severity dashboards, affected-resource reporting
+
+Exposures are long-lived Security Hub V2 (OCSF) findings representing current
+state, built by correlating several contributing findings into a single
+prioritised issue. Kept separate from `security` / `findings` so account-level
+finding aggregates are not double-counted.
+
+`finding_id` is the OCSF `metadata.uid` (a hash), unique per exposure and used
+as the upsert key. `finding_arn` is the OCSF `finding_info.uid` (console ARN).
+CVE / CVSS / EPSS fields are populated when the exposure is a vulnerability
+class; `cve_count` reflects how many CVEs the exposure aggregates.
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| id | SERIAL | Primary key |
+| account_id | INTEGER | Foreign key to accounts |
+| finding_id | VARCHAR(255) | Exposure hash (OCSF metadata.uid), UNIQUE |
+| finding_arn | VARCHAR(512) | Exposure console ARN (OCSF finding_info.uid) |
+| service | VARCHAR(255) | Affected resource type |
+| title | TEXT | Brief description of the exposure |
+| description | TEXT | Detailed description |
+| severity | VARCHAR(50) | CRITICAL, HIGH, MEDIUM, LOW, INFORMATIONAL |
+| status | VARCHAR(50) | NEW, NOTIFIED, SUPPRESSED, RESOLVED |
+| resource_type | VARCHAR(255) | Type of affected resource |
+| resource_id | VARCHAR(255) | Identifier of affected resource |
+| created_at | TIMESTAMP | When the exposure was first detected |
+| updated_at | TIMESTAMP | When the exposure was last updated |
+| recommendation | TEXT | Remediation recommendation |
+| compliance_status | VARCHAR(50) | Compliance status |
+| region | VARCHAR(50) | AWS region, may be global |
+| workflow_state | VARCHAR(50) | Workflow status |
+| record_state | VARCHAR(50) | Record state |
+| product_name | VARCHAR(255) | Security product name |
+| company_name | VARCHAR(255) | Security vendor |
+| product_arn | VARCHAR(512) | Product ARN |
+| generator_id | VARCHAR(512) | Finding generator ID |
+| generator | VARCHAR(255) | Finding generator |
+| cve_id | VARCHAR(50) | Primary CVE identifier |
+| cvss_score | NUMERIC(4,1) | CVSS base score |
+| cvss_severity | VARCHAR(20) | CVSS severity label |
+| cvss_version | VARCHAR(10) | CVSS spec version |
+| cvss_vector | VARCHAR(255) | CVSS vector string |
+| epss_score | NUMERIC(8,6) | EPSS probability of exploitation |
+| cve_count | INTEGER | Number of CVEs aggregated by this exposure |
+
+---
+
+## 44. view_exposure_contributed_finding
+**Purpose**: Correlation between exposures and their contributing findings  
+**Base Tables**: exposure_contributed_finding, exposure_findings  
+**Use Case**: Root-cause analysis, exposure drill-down, remediation planning
+
+Each row is one entry from an exposure's `contributed_finding[]` array. Keyed
+on `(exposure_finding_id, finding_id)` so the same contributed finding may
+correlate into several exposures (many-to-many).
+
+`is_finding` marks whether the contributor is itself a first-class Security
+Hub finding versus a raw signal. `resource_uid` is the resource key used to
+join contributors against `ai_inventory.resource_id` for finding-resource
+correlation.
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| id | SERIAL | Primary key |
+| account_id | INTEGER | Foreign key to accounts |
+| exposure_finding_id | INTEGER | FK to exposure_findings — the parent exposure |
+| finding_id | VARCHAR(255) | Contributed finding hash (OCSF metadata.uid) |
+| finding_arn | VARCHAR(512) | Contributed finding ARN |
+| source | VARCHAR(255) | Source product/detector for the contributor |
+| title | TEXT | Contributed finding title |
+| is_finding | BOOLEAN | TRUE when the contributor is a first-class SH finding |
+| resource_uid | VARCHAR(512) | Affected resource key — joins to ai_inventory.resource_id |
+| status | VARCHAR(50) | Contributor status (NEW, RESOLVED, …), nullable |
+| workflow_state | VARCHAR(50) | Contributor workflow state, nullable |
+| cve_id | VARCHAR(50) | CVE identifier for vulnerability contributors |
+| cvss_score | NUMERIC(4,1) | CVSS base score |
+| cvss_severity | VARCHAR(20) | CVSS severity label |
+| cvss_version | VARCHAR(10) | CVSS spec version |
+| cvss_vector | VARCHAR(255) | CVSS vector string |
+| epss_score | NUMERIC(8,6) | EPSS probability of exploitation |
+| cve_count | INTEGER | Number of CVEs aggregated |
+| trait_count | INTEGER | Number of associated trait rows |
+| trait_categories | VARCHAR(255) | Comma-separated distinct trait categories |
+| trait_names | TEXT | Comma-separated trait names |
+| exposure_finding_uid | VARCHAR(255) | Parent exposure finding_id (hash) |
+| exposure_title | TEXT | Parent exposure title |
+| exposure_severity | VARCHAR(50) | Parent exposure severity |
+
+---
+
+## 45. view_exposure_finding_trait
+**Purpose**: Trait entries attached to each contributed finding  
+**Base Tables**: exposure_finding_trait, exposure_contributed_finding  
+**Use Case**: Trait-based filtering (e.g. internet-facing, publicly-accessible)
+
+Traits are OCSF finding attributes that qualify a contributor (network exposure,
+authentication weakness, misconfiguration flags). Keyed on
+`(contributed_finding_id, name, type)` with `UNIQUE NULLS NOT DISTINCT` so the
+same trait set is idempotent when NULL categories are present.
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| id | SERIAL | Primary key |
+| account_id | INTEGER | Foreign key to accounts |
+| contributed_finding_id | INTEGER | FK to exposure_contributed_finding |
+| category | VARCHAR(64) | Trait category (nullable) |
+| name | VARCHAR(512) | Trait name |
+| type | VARCHAR(64) | Trait type |
+| contributed_finding_uid | VARCHAR(255) | Parent contributor finding_id (from join) |
+| contributed_title | TEXT | Parent contributor title (from join) |
+
+---
+
+## 46. view_threat_findings
+**Purpose**: Security Hub V2 threats — flat findings with actor/API context  
+**Base Table**: threat_findings  
+**Use Case**: Threat intelligence dashboards, actor/API investigation
+
+One row per threat finding. Threats are typically transient detection events
+(unlike exposures, which are stateful). `occurrence_count` is stored as the
+DB column even though the sender payload spells it `count` — `count` collides
+with the SQL aggregate function and would need quoting otherwise. The receiver
+maps `count` → `occurrence_count` on upsert.
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| id | SERIAL | Primary key |
+| account_id | INTEGER | Foreign key to accounts |
+| finding_id | VARCHAR(255) | Threat hash (OCSF metadata.uid), UNIQUE |
+| finding_arn | VARCHAR(512) | Threat console ARN |
+| service | VARCHAR(255) | Affected service |
+| title | TEXT | Threat title |
+| description | TEXT | Threat description |
+| severity | VARCHAR(50) | CRITICAL, HIGH, MEDIUM, LOW, INFORMATIONAL |
+| status | VARCHAR(50) | Threat status |
+| resource_type | VARCHAR(255) | Type of affected resource |
+| resource_id | VARCHAR(255) | Identifier of affected resource |
+| created_at | TIMESTAMP | When the threat was first detected |
+| updated_at | TIMESTAMP | When the threat was last updated |
+| recommendation | TEXT | Remediation recommendation |
+| region | VARCHAR(50) | AWS region |
+| workflow_state | VARCHAR(50) | Workflow status |
+| record_state | VARCHAR(50) | Record state |
+| product_name | VARCHAR(255) | Security product name |
+| company_name | VARCHAR(255) | Security vendor |
+| product_arn | VARCHAR(512) | Product ARN |
+| generator_id | VARCHAR(512) | Finding generator ID |
+| generator | VARCHAR(255) | Finding generator |
+| finding_type | VARCHAR(255) | OCSF threat type |
+| analytic_type | VARCHAR(50) | Analytic category |
+| actor_name | VARCHAR(255) | Threat actor name if identified |
+| actor_uid | VARCHAR(255) | Threat actor unique identifier |
+| api_operation | VARCHAR(255) | API operation involved |
+| api_service | VARCHAR(255) | API service involved |
+| source_ip | VARCHAR(45) | Source IP (IPv4 or IPv6) |
+| source_country | VARCHAR(100) | Source country code / name |
+| occurrence_count | INTEGER | Number of times the threat was observed |
+
+---
+
+## 47. view_security_standards
+**Purpose**: Enabled security standards with daily compliance scores  
+**Base Table**: security_standards  
+**Use Case**: Compliance scorecards, standards adoption tracking, trend charts
+
+Keyed on `(account_id, standard_arn, date_from)` so the same standard writes
+a new row every collection day. This preserves score history for trending —
+if `date_from` were absent from the key, each daily run would overwrite the
+prior day's score.
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| id | SERIAL | Primary key |
+| account_id | INTEGER | Foreign key to accounts |
+| standard_name | VARCHAR(255) | Readable name parsed from the ARN |
+| standard_arn | VARCHAR(512) | Full standard ARN |
+| subscription_arn | VARCHAR(512) | Account subscription ARN |
+| status | VARCHAR(50) | Subscription status (READY, PENDING) |
+| passed | INTEGER | Controls with ComplianceStatus PASSED |
+| failed | INTEGER | Controls with ComplianceStatus FAILED |
+| score | INTEGER | Compliance score, 0-100 |
+| date_from | DATE | Collection period start |
+| date_to | DATE | Collection period end |
+| created_at | TIMESTAMP | Record creation time |
+
+---
+
+## 48. view_ai_inventory
+**Purpose**: Self-hosted AI/ML resources discovered by Security Hub V2  
+**Base Table**: ai_inventory  
+**Use Case**: AI/ML inventory dashboards, exposure correlation for AI resources
+
+One row per AI/ML resource per account. Keyed on `(account_id, resource_id)`
+so exposures can join directly via `exposure_contributed_finding.resource_uid`.
+`resource_guid` is Security Hub's stable identifier retained for reference.
+
+`status` follows an ACTIVE/INACTIVE lifecycle: the receiver marks a resource
+`ACTIVE` when present in the current sender payload, and runs a NOT-IN sweep
+to flip absent rows to `INACTIVE`. `updated_at` refreshes on every state
+change (upsert or resolve). Nullable status is treated as still-active by
+the resolve UPDATE (`IS DISTINCT FROM 'INACTIVE'`).
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| id | SERIAL | Primary key |
+| account_id | INTEGER | Foreign key to accounts |
+| resource_guid | VARCHAR(255) | Security Hub stable identifier |
+| resource_id | VARCHAR(512) | Short-form / composite resource ID, join key |
+| resource_name | VARCHAR(512) | Human-readable resource name |
+| resource_type | VARCHAR(255) | AWS resource type |
+| resource_category | VARCHAR(100) | AI/ML category |
+| resource_sub_category | VARCHAR(100) | AI/ML sub-category |
+| discovery_type | VARCHAR(100) | How Security Hub discovered the resource |
+| region | VARCHAR(50) | AWS region |
+| host_resource_guid | VARCHAR(255) | GUID of hosting resource (e.g. EC2) |
+| host_resource_type | VARCHAR(255) | Type of hosting resource |
+| canonical_id | VARCHAR(512) | Canonical identifier |
+| model_count | INTEGER | Number of AI models detected |
+| agent_count | INTEGER | Number of AI agents detected |
+| total_ai_count | INTEGER | Total AI artefacts (models + agents) |
+| tags | JSONB | AWS resource tags |
+| status | VARCHAR(50) | ACTIVE when present in latest payload, INACTIVE when absent |
+| created_at | TIMESTAMP | When the resource was first seen |
+| updated_at | TIMESTAMP | When status last changed |
+
+---
+
 ## Appendix: Query Examples
 
 ### Example 1: Get account cost summary
@@ -1115,11 +1351,107 @@ GROUP BY account_name, instance_name
 ORDER BY critical_patches DESC;
 ```
 
+### Example 5: Drill into what contributed to each exposure
+```sql
+SELECT
+    account_full,
+    exposure_title,
+    exposure_severity,
+    severity as contributed_severity,
+    title as contributed_title,
+    resource_uid,
+    cve_id,
+    cvss_score,
+    trait_categories
+FROM view_exposure_contributed_finding
+ORDER BY exposure_finding_id, severity;
+```
+
+### Example 5b: Highest-severity exposures with contributor and trait counts
+```sql
+SELECT
+    ef.account_full,
+    ef.severity,
+    ef.title,
+    ef.resource_id,
+    ef.cve_count,
+    COUNT(DISTINCT ecf.id) as contributor_count,
+    COALESCE(SUM(ecf.trait_count), 0) as total_traits
+FROM view_exposure_findings ef
+LEFT JOIN view_exposure_contributed_finding ecf
+       ON ecf.exposure_finding_id = ef.id
+GROUP BY ef.account_full, ef.severity, ef.title, ef.resource_id, ef.cve_count
+ORDER BY contributor_count DESC;
+```
+
+### Example 6: Standards compliance scorecard (latest snapshot per standard)
+```sql
+SELECT DISTINCT ON (account_full, standard_arn)
+    account_full,
+    standard_name,
+    passed,
+    failed,
+    score,
+    date_from
+FROM view_security_standards
+WHERE status = 'READY'
+ORDER BY account_full, standard_arn, date_from DESC;
+```
+
+### Example 7: Standards compliance trend
+```sql
+SELECT
+    account_full,
+    standard_name,
+    date_from,
+    score,
+    passed,
+    failed
+FROM view_security_standards
+WHERE status = 'READY'
+ORDER BY account_full, standard_name, date_from;
+```
+
+### Example 8: Threats by actor / source country
+```sql
+SELECT
+    account_full,
+    finding_type,
+    actor_uid,
+    source_country,
+    source_ip,
+    COUNT(*) as threat_count,
+    SUM(occurrence_count) as total_occurrences
+FROM view_threat_findings
+WHERE status <> 'RESOLVED'
+GROUP BY account_full, finding_type, actor_uid, source_country, source_ip
+ORDER BY total_occurrences DESC;
+```
+
+### Example 9: AI inventory rollup with exposure correlation
+```sql
+SELECT
+    ai.account_full,
+    ai.resource_type,
+    ai.resource_name,
+    ai.model_count,
+    ai.agent_count,
+    ai.status as ai_status,
+    COUNT(DISTINCT ecf.exposure_finding_id) as related_exposures
+FROM view_ai_inventory ai
+LEFT JOIN view_exposure_contributed_finding ecf
+       ON ecf.account_id = ai.account_id
+      AND ecf.resource_uid = ai.resource_id
+GROUP BY ai.account_full, ai.resource_type, ai.resource_name,
+         ai.model_count, ai.agent_count, ai.status
+ORDER BY related_exposures DESC, ai.total_ai_count DESC;
+```
+
 ---
 
 ## Document Information
-- **Version**: 2.0
-- **Last Updated**: 2025
-- **Total Views**: 42
+- **Version**: 2.9.3
+- **Last Updated**: 2026-08
+- **Total Views**: 48
 - **Database**: PostgreSQL (Aurora Serverless v2)
 

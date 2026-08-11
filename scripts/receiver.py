@@ -35,6 +35,12 @@ ARN_AURORA  = os.environ.get("AURORA_CLUSTER_ARN")
 ARN_SECRET  = os.environ.get("AURORA_SECRET_ARN")
 REGION      = os.environ.get("REGION") #boto3.client('sts').meta.region_name
 BUCKET      = os.environ.get("BUCKET")
+
+# Turn on for per-loader and per-security-sub-block timing lines. Off in prod because the
+# extra print calls and time.time() reads add nothing when nothing is broken - and clutter
+# the log. Flip to True (or set DEBUG=true in the env) when a run gets slow and you need to
+# know which sub-block owns the tail
+DEBUG       = os.environ.get("DEBUG", "").lower() in ("true", "1", "yes")
 KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
 
 AWS_TYPECAST_2  =   {
@@ -240,6 +246,7 @@ class AWSResourceType(str, Enum):
     SERVICE_RESOURCES   = "Service Resources"
     CONFIG_INVENTORY    = "Config Inventory"
     SUPPORT_TICKETS     = "Support Tickets"
+    AI_INVENTORY        = "AI Inventory"
     LOGS                = "Logs"
 
 """ 2. S3 MANAGER : Wrapper class to interact with the S3 Bucket """
@@ -423,84 +430,183 @@ class DBManager:
             return None
 
     # Update & Insert = Upsert, this is used to update or insert into the Database
+    #
+    # ONE call per row, down from two. The old shape did a SELECT existence check followed by
+    # either UPDATE or INSERT - two Data API round trips per row, at ~200ms each. On a
+    # 100-row loader that was ~40s just in network. INSERT ... ON CONFLICT ... DO UPDATE
+    # collapses both branches into a single statement and lets Postgres decide which side to
+    # take by consulting the unique index on unique_keys
+    #
+    # Requires: unique_keys MUST match a real UNIQUE constraint on the table, otherwise
+    # ON CONFLICT will error. Every existing call site is audited to match. If a new caller
+    # is added, add the constraint alongside it - or fall back to the old SELECT-then-write
+    # shape by keeping this method's SELECT path as a helper
+    #
+    # Returns 'created' or 'updated' via the xmax=0 trick: on an INSERT that hit no conflict
+    # xmax is 0 because no transaction touched the row before this one; on a DO UPDATE it
+    # holds the txid of the update, so it is non-zero. That makes stats attribution precise
+    # without a separate query
     def upsert(self, table: str, data: Dict, unique_keys: Union[str, List[str]], stats: Optional[Dict] = None) -> str:
-        """Generic upsert method with type casting and flexible updated_at"""
+        """Generic upsert. One Data API call per row via INSERT ... ON CONFLICT ... DO UPDATE."""
         try:
             if not self._validate_sql_identifier(table):
                 raise ValueError(f"Invalid table name: {table}")
-            
+
             if isinstance(unique_keys, str):
                 unique_keys = [unique_keys]
-            
+
             for key in unique_keys + list(data.keys()):
                 if not self._validate_sql_identifier(key):
                     raise ValueError(f"Invalid column name: {key}")
-            
-            where_conditions = []
-            where_params = {}
-            
-            for key in unique_keys:
-                if key in data:
-                    pg_type = self._get_postgres_type(key, AWS_TYPECAST_2)
-                    if pg_type:
-                        where_conditions.append(f"{key} = :{key}::{pg_type}")
-                    else:
-                        where_conditions.append(f"{key} = :{key}")
-                    where_params[key] = data[key]
-            
-            if not where_conditions:
+
+            # A row lacking any of its declared unique_keys can't be routed by ON CONFLICT
+            # to the right existing row, so refuse rather than write a duplicate
+            if not all(k in data for k in unique_keys):
                 return 'error'
-            
-            where_clause = ' AND '.join(where_conditions)
-            
-            # Check if record exists
-            existing = self.select_one(f"SELECT id FROM {table} WHERE {where_clause}", where_params)  # nosec B608
-            
-            if existing:
-                # Update existing - build typed SET clause
-                update_fields = []
-                for k in data.keys():
-                    if k not in ['id', 'created_at']:
-                        pg_type = self._get_postgres_type(k, AWS_TYPECAST_2)
-                        if pg_type:
-                            update_fields.append(f"{k} = :{k}::{pg_type}")
-                        else:
-                            update_fields.append(f"{k} = :{k}")
-                
-                if update_fields:
-                    # Only add updated_at if table has it (check by trying to describe table)
-                    update_query = f"UPDATE {table} SET {', '.join(update_fields)} WHERE {where_clause}"  # nosec B608
-                    self.execute_statement(update_query, {**data, **where_params})
-                    if stats: stats['UPDATED'] += 1
-                    return 'updated'
-                else:
-                    if stats: stats['SKIPPED'] += 1
-                    return 'skipped'
+
+            cols = list(data.keys())
+
+            # Typed placeholders for VALUES, same rules as before
+            placeholders = []
+            for col in cols:
+                pg_type = self._get_postgres_type(col, AWS_TYPECAST_2)
+                placeholders.append(f":{col}::{pg_type}" if pg_type else f":{col}")
+
+            # SET clause for the DO UPDATE branch. id/created_at deliberately excluded so a
+            # re-insert of the same row does not overwrite them
+            update_cols  = [c for c in cols if c not in unique_keys and c not in ('id', 'created_at')]
+            update_parts = []
+            for c in update_cols:
+                pg_type = self._get_postgres_type(c, AWS_TYPECAST_2)
+                update_parts.append(f"{c} = EXCLUDED.{c}::{pg_type}" if pg_type else f"{c} = EXCLUDED.{c}")
+
+            if update_parts:
+                on_conflict = f"({', '.join(unique_keys)}) DO UPDATE SET {', '.join(update_parts)}" # nosec B608
             else:
-                # Insert new - build typed INSERT
-                cols = list(data.keys())
-                placeholders = []
-                for col in cols:
-                    pg_type = self._get_postgres_type(col, AWS_TYPECAST_2)
-                    if pg_type:
-                        placeholders.append(f":{col}::{pg_type}")
-                    else:
-                        placeholders.append(f":{col}")
-                
-                query = f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join(placeholders)})"  # nosec B608
-                result = self.execute_statement(query, data)
-                
-                if result:
-                    if stats: stats['CREATED'] += 1
-                    return 'created'
-                else:
-                    if stats: stats['SKIPPED'] += 1
-                    return 'error'
-                    
+                # Nothing to update besides id/created_at means the row is fully identified by
+                # its keys alone (e.g. product_accounts). DO NOTHING is the honest semantic
+                on_conflict = f"({', '.join(unique_keys)}) DO NOTHING"
+
+            sql = (
+                f"INSERT INTO {table} ({', '.join(cols)}) "  # nosec B608
+                f"VALUES ({', '.join(placeholders)}) "
+                f"ON CONFLICT {on_conflict} "
+                # xmax=0 on a fresh row, non-zero on a DO UPDATE row. RETURNING gives one row
+                # per applied statement; a DO NOTHING that skipped returns no row at all
+                f"RETURNING (xmax = 0) AS was_created"
+            )
+
+            response = self.execute_statement(sql, data)
+            records  = response.get('records', [])
+
+            if not records:
+                # DO NOTHING path with no update columns and a conflict on existing row
+                if stats: stats['SKIPPED'] += 1
+                return 'skipped'
+
+            was_created = next(iter(records[0][0].values())) if records[0] else False
+
+            if was_created:
+                if stats: stats['CREATED'] += 1
+                return 'created'
+            else:
+                if stats: stats['UPDATED'] += 1
+                return 'updated'
+
         except Exception as e:
             print(f"{ERROR} Upsert error for {table}: {e}")
             if stats: stats['SKIPPED'] += 1
             return 'error'
+
+    # Batch upsert - collapses N per-row calls into ONE network round trip
+    #
+    # The RDS Data API's batch_execute_statement takes an array of parameter sets, applies
+    # the same SQL to each, and returns per-row results in a single call. For a leaf table
+    # like exposure_finding_trait that carries ~200 rows per file, this is the difference
+    # between ~400 network calls (SELECT + UPSERT per row via the regular upsert method) and
+    # 1 call for the whole load.
+    #
+    # Only usable when every row shares the same column set - which is exactly the case for
+    # the exposure/threat/trait loaders where rows are built from a fixed allowlist. If any
+    # row has a different key set, split into groups by key set and batch each group.
+    #
+    # Uses INSERT ... ON CONFLICT ... DO UPDATE so a re-run of the same batch is idempotent.
+    # RETURNING is not used - callers that need the generated id must either pre-fetch a
+    # {unique_key -> id} map (see load_security_hub_v2_data) or fall back to select_one
+    def batch_upsert(self, table: str, rows: List[Dict], unique_keys: Union[str, List[str]], stats: Optional[Dict] = None) -> int:
+        """Batch upsert N rows in ONE Data API call. Returns row count applied."""
+        try:
+            if not rows:
+                return 0
+
+            if not self._validate_sql_identifier(table):
+                raise ValueError(f"Invalid table name: {table}")
+
+            if isinstance(unique_keys, str):
+                unique_keys = [unique_keys]
+
+            # Column list is the UNION of every row's keys, so rows with different key sets
+            # (e.g. service_resources where some rows have 'engine' and others don't) all fit
+            # under one SQL statement. Missing keys per row are backfilled with None below
+            cols = []
+            seen = set()
+            for row in rows:
+                for k in row.keys():
+                    if k not in seen:
+                        seen.add(k)
+                        cols.append(k)
+
+            for key in unique_keys + cols:
+                if not self._validate_sql_identifier(key):
+                    raise ValueError(f"Invalid column name: {key}")
+
+            # Normalize every row to the full column set. This has to happen before
+            # _format_parameters so that batch_execute_statement gets a consistent shape
+            rows = [{c: row.get(c) for c in cols} for row in rows]
+
+            # Typed placeholders, same rules as the single-row upsert
+            placeholders = []
+            for col in cols:
+                pg_type = self._get_postgres_type(col, AWS_TYPECAST_2)
+                placeholders.append(f":{col}::{pg_type}" if pg_type else f":{col}")
+
+            # Update every non-key column on conflict. Skipping id/created_at matches the
+            # single-row upsert's convention
+            update_cols  = [c for c in cols if c not in unique_keys and c not in ('id', 'created_at')]
+            update_parts = []
+            for c in update_cols:
+                pg_type = self._get_postgres_type(c, AWS_TYPECAST_2)
+                update_parts.append(f"{c} = EXCLUDED.{c}::{pg_type}" if pg_type else f"{c} = EXCLUDED.{c}")
+
+            on_conflict = f"({', '.join(unique_keys)}) DO UPDATE SET {', '.join(update_parts)}" if update_parts else f"({', '.join(unique_keys)}) DO NOTHING" # nosec B608
+
+            sql = (
+                f"INSERT INTO {table} ({', '.join(cols)}) "  # nosec B608
+                f"VALUES ({', '.join(placeholders)}) "
+                f"ON CONFLICT {on_conflict}"
+            )
+
+            # batch_execute_statement takes an array of parameter sets, each formatted the
+            # same way execute_statement's single 'parameters' field is
+            parameter_sets = [self._format_parameters(row) for row in rows]
+
+            self.client.batch_execute_statement(
+                resourceArn     = self.cluster_arn,
+                secretArn       = self.secret_arn,
+                database        = self.database,
+                sql             = sql,
+                parameterSets   = parameter_sets
+            )
+
+            if stats:
+                stats['CREATED'] += len(rows)   # rough attribution, batch API does not
+                                                # distinguish INSERT from UPDATE per row
+            return len(rows)
+
+        except Exception as e:
+            print(f"{ERROR} Batch upsert error for {table}: {e}")
+            if stats: stats['SKIPPED'] += len(rows)
+            return 0
 
 ###END: HELPER CLASSES###
 
@@ -685,12 +791,19 @@ class CoreManager:
                     {'account_id': self.curr_acct['id'], 'date_from': data['date_from']}
                 )
                 
-                # Load non-compliant resources (children)
+                # Load non-compliant resources (children) - batched. This table accumulates
+                # ~200 rows per run and holds ~80k rows total across all history, so the
+                # per-row upsert path was the biggest single tail-latency contributor
                 if db_config and non_compliant:
+                    ncr_rows = []
                     for resource in non_compliant:
                         resource['created_at']          = resource.pop('config_rule_invoked_time', None)
                         resource['config_report_id']    = db_config['id']
-                        self.db.upsert('non_compliant_resources', resource, ['config_report_id', 'resource_id', 'rule_name'], self.stats)
+                        ncr_rows.append(resource)
+
+                    if ncr_rows:
+                        self.db.batch_upsert('non_compliant_resources', ncr_rows,
+                                              ['config_report_id', 'resource_id', 'rule_name'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.CONFIG)
             return True
@@ -713,17 +826,21 @@ class CoreManager:
             }
             
             if isinstance(data, list):
+                service_rows = []
                 for service in data:
                     # Filter to only schema fields
                     filtered_service                = {k: v for k, v in service.items() if k in service_fields}
                     filtered_service['account_id']  = self.curr_acct['id']
-                    
+
                     # Convert usage_types array to comma-separated string
                     if 'usage_types' in filtered_service and isinstance(filtered_service['usage_types'], list):
                         filtered_service['usage_types'] = ','.join(str(item) for item in filtered_service['usage_types'])
-                    
-                    # Upsert using composite unique key
-                    self.db.upsert('services', filtered_service, ['account_id', 'service', 'usage_types', 'date_from'], self.stats)
+
+                    service_rows.append(filtered_service)
+
+                if service_rows:
+                    self.db.batch_upsert('services', service_rows,
+                                          ['account_id', 'service', 'usage_types', 'date_from'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SERVICE)
             return True
@@ -768,34 +885,41 @@ class CoreManager:
                 if db_cost:
                     cost_map['cost_report_id'] = db_cost['id']
             
-            # Load service costs (children)
+            # Load service costs (children) - batched
             if top_services and cost_map:
                 cost_report_id = cost_map['cost_report_id']
-                
-                for service in top_services:
-                    service_data =  {
-                                        'cost_report_id': cost_report_id,
-                                        'service_name'  : service['service'],
-                                        'cost'          : service['cost'],
-                                        'region'        : "Global"                  # Cost Explorer is a Global Service
-                                    }
-                    self.db.upsert('service_costs', service_data, ['cost_report_id', 'service_name', 'region'], self.stats)
+
+                cost_rows = [
+                    {
+                        'cost_report_id': cost_report_id,
+                        'service_name'  : service['service'],
+                        'cost'          : service['cost'],
+                        'region'        : "Global"                  # Cost Explorer is a Global Service
+                    }
+                    for service in top_services
+                ]
+                if cost_rows:
+                    self.db.batch_upsert('service_costs', cost_rows,
+                                          ['cost_report_id', 'service_name', 'region'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Service Cost Loaded")
 
-            # Load forecasts (children)
+            # Load forecasts (children) - batched
             if forecasts and cost_map:
                 cost_report_id = cost_map['cost_report_id']
-                
-                for forecast in forecasts:
-                    forecast_data = {
-                                        'cost_report_id': cost_report_id,
-                                        'period_start'  : forecast['period']['start'],
-                                        'period_end'    : forecast['period']['end'],
-                                        'amount'        : forecast['amount'],
-                                        'region'        : "Global"                  # Cost Explorer is a Global Service
-                                    }
-                    
-                    self.db.upsert('cost_forecasts', forecast_data, ['cost_report_id', 'period_start', 'region'], self.stats)
+
+                forecast_rows = [
+                    {
+                        'cost_report_id': cost_report_id,
+                        'period_start'  : forecast['period']['start'],
+                        'period_end'    : forecast['period']['end'],
+                        'amount'        : forecast['amount'],
+                        'region'        : "Global"                  # Cost Explorer is a Global Service
+                    }
+                    for forecast in forecasts
+                ]
+                if forecast_rows:
+                    self.db.batch_upsert('cost_forecasts', forecast_rows,
+                                          ['cost_report_id', 'period_start', 'region'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.COST, msg="Cost Forecast Loaded")
 
             
@@ -807,6 +931,15 @@ class CoreManager:
     #Method: UPSERT
     def load_security_data(self, data: Dict) -> bool:
         """Load comprehensive security data with blazing fast upserts"""
+        # Per sub-block timing when DEBUG is on. _lap is a no-op when off. Sub-block
+        # timing lives HERE, not on the outer loader, because load_security_data is a
+        # single ThreadPoolExecutor future - the loader-level timer treats it as one
+        # opaque call, so a bottleneck inside it needs its own instrumentation
+        import time as _t
+        _sec_marks = [('start', _t.time())] if DEBUG else None
+        def _lap(label):
+            if _sec_marks is not None:
+                _sec_marks.append((label, _t.time()))
         try:
             # Define schema fields for each security service
             guard_duty_fields           =   {
@@ -886,19 +1019,27 @@ class CoreManager:
                         if db_security:
                             security_map[security_service.get('service')] = db_security['id']
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Secrity Hub Loaded")
-            # Load findings (children)
+            _lap("security_hub_summary")
+            # Load findings (children) - batched. Legacy Security Hub findings can run into
+                # the hundreds per payload against a ~5k-row table, which was ~95% of the entire
+                # receiver's wall clock time before batching. Same batch_upsert helper as
+                # everywhere else - collapses N calls to 1
             if 'security_hub' in data and security_map:
+                finding_rows = []
                 for security_service in data['security_hub']:
                     service_name = security_service.get('service')
                     if service_name in security_map and 'findings' in security_service:
                         security_id = security_map[service_name]
-                        
+
                         for finding in security_service['findings']:
                             filtered_finding                = {k: v for k, v in finding.items() if k in finding_fields}
                             filtered_finding['security_id'] = security_id
-                            
-                            self.db.upsert('findings', filtered_finding, 'finding_id', self.stats)
+                            finding_rows.append(filtered_finding)
+
+                if finding_rows:
+                    self.db.batch_upsert('findings', finding_rows, 'finding_id', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Secrity Hub Findings Loaded")
+            _lap("security_hub_findings")
             # Load GuardDuty findings
             if 'guard_duty' in data and self.curr_acct is not None:
                 for finding in data['guard_duty']:
@@ -909,6 +1050,7 @@ class CoreManager:
                     
                     self.db.upsert('guard_duty_findings', filtered_finding, ['account_id', 'detector_id'], self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Guard Duty Loaded")
+            _lap("guard_duty")
             # Load KMS keys
             if 'kms' in data and self.curr_acct is not None:
                 for key in data['kms']:
@@ -917,6 +1059,7 @@ class CoreManager:
                     
                     self.db.upsert('kms_keys', filtered_key, 'key_id', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="KMS Loaded")
+            _lap("kms")
             # Load WAF rules
             if 'waf' in data and self.curr_acct is not None:
                 for waf in data['waf']:
@@ -926,6 +1069,7 @@ class CoreManager:
                     
                     self.db.upsert('waf_rules', filtered_waf, 'waf_id', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="WAF Loaded")
+            _lap("waf")
 
             # Load WAF rules detailed
             if 'waf_rules' in data and self.curr_acct is not None:
@@ -939,6 +1083,7 @@ class CoreManager:
                     
                     self.db.upsert('waf_rules_detailed', filtered_rule, ['account_id', 'web_acl_name', 'rule_name'], self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="WAF Rules Detailed Loaded")
+            _lap("waf_rules_detailed")
 
             # Load CloudTrail logs
             if 'cloudtrail' in data and self.curr_acct is not None:
@@ -948,6 +1093,7 @@ class CoreManager:
                     
                     self.db.upsert('cloudtrail_logs', filtered_trail, 'arn', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Cloud Trail Loaded")
+            _lap("cloudtrail")
 
             # Load Secrets Manager secrets
             if 'secrets_manager' in data and self.curr_acct is not None:
@@ -957,6 +1103,7 @@ class CoreManager:
                     
                     self.db.upsert('secrets_manager_secrets', filtered_secret, 'arn', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Secrets Manager Loaded")
+            _lap("secrets_manager")
 
             # Load Certificate Manager certificates
             if 'certificate_manager' in data and self.curr_acct is not None:
@@ -966,19 +1113,271 @@ class CoreManager:
                     
                     self.db.upsert('certificates', filtered_cert, 'arn', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Certificate Manager Loaded")
-            # Load Inspector findings
+            _lap("certificate_manager")
+            # Load Inspector findings - batched, N calls collapse to 1
             if 'inspector' in data and self.curr_acct is not None:
+                inspector_rows = []
                 for finding in data['inspector']:
                     filtered_finding = {k: v for k, v in finding.items() if k in inspector_fields}
                     filtered_finding['account_id'] = self.curr_acct['id']
-                    
-                    self.db.upsert('inspector_findings', filtered_finding, 'finding_arn', self.stats)
+                    inspector_rows.append(filtered_finding)
+
+                if inspector_rows:
+                    self.db.batch_upsert('inspector_findings', inspector_rows, 'finding_arn', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Inspector Loaded")
+            _lap("inspector")
+
+            # Load Security Hub V2 (exposures, threats, standards)
+            self.load_security_hub_v2_data(data)
+            _lap("security_hub_v2")
+
+            if _sec_marks is not None:
+                _prev = _sec_marks[0][1]
+                for _lbl, _t_at in _sec_marks[1:]:
+                    print(f"{TIMING}   security.{_lbl}: {round(_t_at - _prev, 2)}s")
+                    _prev = _t_at
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY)
             return True
         except Exception as e:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.COST, msg=e)
+            return False
+    #Method: UPSERT
+
+    def load_security_hub_v2_data(self, data: Dict) -> bool:
+        """Load Security Hub V2 (OCSF): exposures with their contributed findings and traits,
+        threats, and security standards. A finding present in an earlier run but absent from
+        this one is marked RESOLVED rather than deleted, so the row stays as history.
+
+        NOTE: get_security_hub_v2 in sender.py wraps both the exposures and threats fetch in
+        one try/except that returns {} on any failure, exactly like an empty result. A
+        transient AWS throttle or IAM change on the sender side is therefore indistinguishable
+        here from a genuinely quiet day, and the resolve step below would incorrectly close
+        every real open exposure/threat for the account. Known gap, matches the same blind
+        spot already flagged on get_security's except blocks - not guarded here by design,
+        revisit alongside that.
+        """
+        try:
+            if self.curr_acct is None:
+                return False
+
+            exposure_fields         =   {
+                                            'account_id', 'finding_id', 'finding_arn', 'service', 'title',
+                                            'description', 'severity', 'status', 'resource_type', 'resource_id',
+                                            'created_at', 'updated_at', 'recommendation', 'compliance_status',
+                                            'region', 'workflow_state', 'record_state', 'product_name',
+                                            'company_name', 'product_arn', 'generator_id', 'generator',
+                                            'cve_id', 'cvss_score', 'cvss_severity', 'cvss_version',
+                                            'cvss_vector', 'epss_score', 'cve_count'
+                                        }
+            contributed_fields      =   {
+                                            'finding_id', 'finding_arn', 'source', 'title', 'is_finding',
+                                            'resource_uid', 'cve_id', 'cvss_score', 'cvss_severity',
+                                            'cvss_version', 'cvss_vector', 'epss_score', 'cve_count',
+                                            'trait_count', 'trait_categories', 'trait_names',
+                                            # status/workflow_state are nullable and not emitted by the sender
+                                            # today, but the allowlist accepts them so a future sender value
+                                            # flows through untouched. The resolve-close UPDATE below treats
+                                            # NULL as active via IS DISTINCT FROM 'RESOLVED'
+                                            'status', 'workflow_state'
+                                        }
+            trait_fields            =   {'category', 'name', 'type'}
+            threat_fields           =   {
+                                            'account_id', 'finding_id', 'finding_arn', 'service', 'title',
+                                            'description', 'severity', 'status', 'resource_type', 'resource_id',
+                                            'created_at', 'updated_at', 'recommendation', 'region',
+                                            'workflow_state', 'record_state', 'product_name', 'company_name',
+                                            'product_arn', 'generator_id', 'generator', 'finding_type',
+                                            'analytic_type', 'actor_name', 'actor_uid', 'api_operation',
+                                            'api_service', 'source_ip', 'source_country'
+                                        }
+            standards_fields        =   {
+                                            'account_id', 'standard_name', 'standard_arn', 'subscription_arn',
+                                            'status', 'passed', 'failed', 'score', 'date_from', 'date_to'
+                                        }
+
+            # Load exposures (parent), then contributed findings (child), then traits (grandchild)
+            #
+            # Data API round-trip cost dominates here: every upsert is already a 2-call
+            # SELECT+INSERT/UPDATE. A naive select_one per parent to resolve its integer id for
+            # the child FK adds a 3rd call per row, and stacked three levels deep it blows out
+            # to ~40 calls per exposure. Instead, the parent id maps are pre-fetched ONCE per
+            # level with a single SELECT, and the child upsert reads its FK out of the map.
+            # Same trick as security_map / instance_map used elsewhere in this file
+            if 'exposures' in data:
+                # {finding_id -> exposure_findings.id} for this account, one call
+                existing = self.db.select(
+                    "SELECT id, finding_id FROM exposure_findings WHERE account_id = :account_id",
+                    {'account_id': self.curr_acct['id']}
+                )
+                exposure_id_map = {row['finding_id']: row['id'] for row in existing}
+
+                # {(exposure_finding_id, finding_id) -> exposure_contributed_finding.id}
+                existing_contrib = self.db.select(
+                    "SELECT id, exposure_finding_id, finding_id FROM exposure_contributed_finding WHERE account_id = :account_id",
+                    {'account_id': self.curr_acct['id']}
+                )
+                contrib_id_map = {(row['exposure_finding_id'], row['finding_id']): row['id']
+                                  for row in existing_contrib}
+
+                # Exposures upsert one-by-one first, so their SERIAL ids materialize and can be
+                # used as FKs for the batched contributor rows below. Exposure count is low
+                # (dozens per account) so N per-row calls is acceptable here
+                for exposure in data['exposures']:
+                    filtered_exposure               = {k: v for k, v in exposure.items() if k in exposure_fields}
+                    filtered_exposure['account_id'] = self.curr_acct['id']
+
+                    self.db.upsert('exposure_findings', filtered_exposure, 'finding_id', self.stats)
+
+                    # Newly created rows are absent from the pre-fetch, so resolve one on demand
+                    exposure_pk = exposure_id_map.get(exposure.get('finding_id'))
+                    if exposure_pk is None:
+                        db_exposure = self.db.select_one(
+                            "SELECT id FROM exposure_findings WHERE finding_id = :finding_id",
+                            {'finding_id': exposure.get('finding_id')}
+                        )
+                        if db_exposure:
+                            exposure_pk = db_exposure['id']
+                            exposure_id_map[exposure.get('finding_id')] = exposure_pk
+
+                # Contributors and traits ride on batch_upsert - one Data API call per level
+                # replaces N * (2 for the upsert existence-check pattern) row-by-row calls.
+                # A typical file with 13 exposures * 3 contributors * 5 traits collapses from
+                # ~450 network round trips to 2
+                contrib_rows = []
+                for exposure in data['exposures']:
+                    exposure_pk = exposure_id_map.get(exposure.get('finding_id'))
+                    if exposure_pk is None:
+                        continue
+                    for contributed in exposure.get('contributed_finding', []):
+                        filtered_contrib                        = {k: v for k, v in contributed.items() if k in contributed_fields}
+                        filtered_contrib['account_id']          = self.curr_acct['id']
+                        filtered_contrib['exposure_finding_id'] = exposure_pk
+                        contrib_rows.append(filtered_contrib)
+
+                if contrib_rows:
+                    self.db.batch_upsert(
+                        'exposure_contributed_finding', contrib_rows,
+                        ['exposure_finding_id', 'finding_id'], self.stats
+                    )
+
+                    # Refresh the contrib id map with newly-created rows so trait FKs resolve.
+                    # One SELECT rather than N select_ones - same trick as the initial pre-fetch
+                    existing_contrib = self.db.select(
+                        "SELECT id, exposure_finding_id, finding_id FROM exposure_contributed_finding WHERE account_id = :account_id",
+                        {'account_id': self.curr_acct['id']}
+                    )
+                    contrib_id_map = {(row['exposure_finding_id'], row['finding_id']): row['id']
+                                      for row in existing_contrib}
+
+                trait_rows = []
+                for exposure in data['exposures']:
+                    exposure_pk = exposure_id_map.get(exposure.get('finding_id'))
+                    if exposure_pk is None:
+                        continue
+                    for contributed in exposure.get('contributed_finding', []):
+                        contrib_pk = contrib_id_map.get((exposure_pk, contributed.get('finding_id')))
+                        if contrib_pk is None:
+                            continue
+                        for trait in contributed.get('traits', []):
+                            filtered_trait                           = {k: v for k, v in trait.items() if k in trait_fields}
+                            filtered_trait['account_id']             = self.curr_acct['id']
+                            filtered_trait['contributed_finding_id'] = contrib_pk
+                            trait_rows.append(filtered_trait)
+
+                if trait_rows:
+                    self.db.batch_upsert(
+                        'exposure_finding_trait', trait_rows,
+                        ['contributed_finding_id', 'name', 'type'], self.stats
+                    )
+
+                # A finding_id in the table but not in this run's payload is no longer being
+                # reported by Security Hub, so it is closed out rather than left stale. Runs
+                # unconditionally, including when present_ids is empty - an account that now
+                # reports zero active exposures must resolve every row it previously had, not
+                # skip the update because there was nothing to build a NOT IN list against
+                present_ids = {e['finding_id'] for e in data['exposures'] if e.get('finding_id')}
+                params      = {f'id{i}': fid for i, fid in enumerate(present_ids)}
+                params['account_id'] = self.curr_acct['id']
+                not_in      = ' AND finding_id NOT IN ({})'.format(
+                                  ','.join(f':id{i}' for i in range(len(present_ids)))
+                              ) if present_ids else ''
+
+                self.db.execute_statement(
+                    f"UPDATE exposure_findings SET status = 'RESOLVED', workflow_state = 'RESOLVED', "  # nosec B608
+                    f"record_state = 'Resolved', updated_at = now() "
+                    f"WHERE account_id = :account_id{not_in} AND status != 'RESOLVED'",
+                    params
+                )
+
+                # Contributors resolve when the same finding_id no longer ties to any active
+                # exposure in THIS account. The NOT EXISTS check protects a contributor that
+                # is still contributing elsewhere (e.g. one IAM user showing up under several
+                # exposures - remove one exposure and the IAM user should stay open while any
+                # other exposure it feeds is still active). status IS DISTINCT FROM 'RESOLVED'
+                # so both NULL and 'NEW' rows are treated as still-active
+                self.db.execute_statement(
+                    "UPDATE exposure_contributed_finding ecf "
+                    "SET status = 'RESOLVED', workflow_state = 'RESOLVED' "
+                    "FROM exposure_findings ef "
+                    "WHERE ecf.exposure_finding_id = ef.id "
+                    "  AND ecf.account_id = :account_id "
+                    "  AND ef.status = 'RESOLVED' "
+                    "  AND ecf.status IS DISTINCT FROM 'RESOLVED' "
+                    "  AND NOT EXISTS ( "
+                    "      SELECT 1 FROM exposure_contributed_finding other_ecf "
+                    "      JOIN exposure_findings other_ef ON other_ecf.exposure_finding_id = other_ef.id "
+                    "      WHERE other_ecf.finding_id  = ecf.finding_id "
+                    "        AND other_ecf.account_id  = ecf.account_id "
+                    "        AND other_ef.status      != 'RESOLVED' "
+                    "  )",
+                    {'account_id': self.curr_acct['id']}
+                )
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Exposures Loaded")
+
+            # Load threats - batched, same reasoning as contributors above
+            if 'threats' in data:
+                threat_rows = []
+                for threat in data['threats']:
+                    filtered_threat                     = {k: v for k, v in threat.items() if k in threat_fields}
+                    filtered_threat['account_id']        = self.curr_acct['id']
+                    filtered_threat['occurrence_count']  = threat.get('count', 0)
+                    threat_rows.append(filtered_threat)
+
+                if threat_rows:
+                    self.db.batch_upsert('threat_findings', threat_rows, 'finding_id', self.stats)
+
+                # Same unconditional resolve as exposures above - see comment there
+                present_ids = {t['finding_id'] for t in data['threats'] if t.get('finding_id')}
+                params      = {f'id{i}': fid for i, fid in enumerate(present_ids)}
+                params['account_id'] = self.curr_acct['id']
+                not_in      = ' AND finding_id NOT IN ({})'.format(
+                                  ','.join(f':id{i}' for i in range(len(present_ids)))
+                              ) if present_ids else ''
+
+                self.db.execute_statement(
+                    f"UPDATE threat_findings SET status = 'RESOLVED', workflow_state = 'RESOLVED', "  # nosec B608
+                    f"record_state = 'Resolved', updated_at = now() "
+                    f"WHERE account_id = :account_id{not_in} AND status != 'RESOLVED'",
+                    params
+                )
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Threats Loaded")
+
+            # Load security standards (dated snapshot, one row per standard per day)
+            if 'standards' in data:
+                for standard in data['standards']:
+                    filtered_standard               = {k: v for k, v in standard.items() if k in standards_fields}
+                    filtered_standard['account_id']  = self.curr_acct['id']
+
+                    self.db.upsert(
+                        'security_standards', filtered_standard,
+                        ['account_id', 'standard_arn', 'date_from'], self.stats
+                    )
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Security Standards Loaded")
+
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.SECURITY, msg=e)
             return False
     #Method: UPSERT
     def load_inventory_data(self, data: Dict) -> bool:
@@ -1007,7 +1406,7 @@ class CoreManager:
                     filtered_instance               = {k: v for k, v in instance.items() if k in instance_fields}
                     filtered_instance['account_id'] = self.curr_acct['id']
                     
-                    result = self.db.upsert('inventory_instances', filtered_instance, ['instance_id','state','classification'], self.stats)
+                    result = self.db.upsert('inventory_instances', filtered_instance, 'instance_id', self.stats)
                     
                     if result in ['created', 'updated']:
                         db_instance = self.db.select_one(
@@ -1018,15 +1417,22 @@ class CoreManager:
                             instance_map[instance['instance_id']] = db_instance['id']
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.INVENTORY, msg="Inventory Instances Loaded")
 
-            # Load applications
+            # Load applications - batched. This is the biggest loop in the file (~100 rows on
+            # a typical account), so collapsing N calls to 1 is the biggest single wall-clock
+            # win from this batching pass
             if 'applications' in data and instance_map and self.curr_acct is not None:
                 first_instance_db_id = next(iter(instance_map.values()))
-                
+
+                app_rows = []
                 for app in data['applications']:
                     filtered_app                = {k: v for k, v in app.items() if k in app_fields}
                     filtered_app['instance_id'] = first_instance_db_id
                     filtered_app['account_id']  = self.curr_acct['id']  # Add account_id
-                    self.db.upsert('inventory_applications', filtered_app, ['instance_id', 'name'], self.stats)
+                    app_rows.append(filtered_app)
+
+                if app_rows:
+                    self.db.batch_upsert('inventory_applications', app_rows,
+                                          ['account_id', 'instance_id', 'name', 'version'], self.stats)
                 self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.INVENTORY, msg="Inventory Applications Loaded")
 
             # Load patches
@@ -1205,17 +1611,24 @@ class CoreManager:
             numeric_fields  =   {'instance_count', 'min_size', 'max_size', 'available_ip_count', 'size_gb'}
 
             if isinstance(data, list) and self.curr_acct is not None:
+                # Build a list first, then send them all in ONE batch call. Different resource
+                # types carry different fields (engine, instance_class, etc.) - batch_upsert
+                # normalizes to the union of all rows' keys and backfills None for missing
+                resource_rows = []
                 for resource in data:
                     # Filter to only schema fields
                     filtered_resource               = {k: v for k, v in resource.items() if k in resource_fields}
                     filtered_resource['account_id'] = self.curr_acct['id']
-                    
+
                     for field in numeric_fields:
                         if field in filtered_resource and filtered_resource[field] in ('', None):
                             filtered_resource[field] = None
 
-                    # Upsert using composite unique key (account_id + resource_id)
-                    self.db.upsert('service_resources', filtered_resource, ['account_id', 'resource_id'], self.stats)
+                    resource_rows.append(filtered_resource)
+
+                if resource_rows:
+                    self.db.batch_upsert('service_resources', resource_rows,
+                                          ['account_id', 'service_name', 'resource_id'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SERVICE_RESOURCES)
             return True
@@ -1276,6 +1689,85 @@ class CoreManager:
             self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.CONFIG_INVENTORY, msg=e)
             return False
     #Method: UPSERT
+    def load_ai_inventory_data(self, data: List[Dict]) -> bool:
+        """Load self-hosted AI/ML resource inventory (Security Hub V2 GetResourcesV2).
+
+        Lifecycle: rows in the current payload upsert with status='ACTIVE'; rows in the
+        DB but absent from this payload are marked status='INACTIVE' by the NOT IN
+        sweep. updated_at moves on every state change (upsert or resolve) so the column
+        answers "when did this resource last change state". History is preserved -
+        rows are never deleted, so a resource that disappeared last month is still
+        queryable via WHERE status='INACTIVE' AND updated_at < ...
+
+        KNOWN GAP: the sender's _get_ai_inventory catches every exception and returns
+        []. A transient AWS error therefore looks identical to a genuine zero-resource
+        account, and this sweep would incorrectly mark everything INACTIVE. Same
+        trade-off as the exposure/threat resolve-close paths
+        """
+        try:
+            if not isinstance(data, list) or self.curr_acct is None:
+                return False
+
+            ai_fields = {
+                'resource_guid', 'resource_id', 'resource_name', 'resource_type',
+                'resource_category', 'resource_sub_category', 'discovery_type',
+                'region', 'host_resource_guid', 'host_resource_type', 'canonical_id',
+                'model_count', 'agent_count', 'total_ai_count', 'tags', 'created_at'
+            }
+
+            _now = datetime.now(timezone.utc)
+
+            rows = []
+            for resource in data:
+                filtered = {k: v for k, v in resource.items() if k in ai_fields}
+                filtered['account_id'] = self.curr_acct['id']
+                # Security Hub returns ResourceCreationTimeDt as '' when the resource
+                # has no creation timestamp. AWS_TYPECAST_2 casts created_at to
+                # timestamp and Postgres rejects '' as invalid syntax (SQLState 22007).
+                # Coerce to None so the Data API sends {isNull: true}
+                if filtered.get('created_at') == '':
+                    filtered['created_at'] = None
+                # ACTIVE marks the row as present in this run. NOT IN sweep below flips
+                # missing rows to INACTIVE, updating updated_at on the transition
+                filtered['status']     = 'ACTIVE'
+                filtered['updated_at'] = _now
+                rows.append(filtered)
+
+            if rows:
+                self.db.batch_upsert(
+                    'ai_inventory', rows,
+                    ['account_id', 'resource_id'], self.stats
+                )
+
+            # Rows in the DB but not in the current payload -> INACTIVE. Runs
+            # unconditionally, including when the payload is empty. IS DISTINCT FROM
+            # 'INACTIVE' catches both NULL (legacy rows) and 'ACTIVE' rows, while
+            # leaving already-INACTIVE rows untouched so their updated_at reflects
+            # the day they went inactive, not the day of this run.
+            #
+            # Keyed on resource_id (not resource_guid) to match the UNIQUE constraint
+            # on ai_inventory: the constraint is (account_id, resource_id), and the
+            # exposure contributor chain also joins on this column
+            present_ids = {r['resource_id'] for r in data if r.get('resource_id')}
+            params      = {f'rid{i}': rid for i, rid in enumerate(present_ids)}
+            params['account_id'] = self.curr_acct['id']
+            not_in = ' AND resource_id NOT IN ({})'.format(
+                        ','.join(f':rid{i}' for i in range(len(present_ids)))
+                     ) if present_ids else ''
+
+            self.db.execute_statement(
+                f"UPDATE ai_inventory SET status = 'INACTIVE', updated_at = now() "  # nosec B608
+                f"WHERE account_id = :account_id{not_in} "
+                f"AND status IS DISTINCT FROM 'INACTIVE'",
+                params
+            )
+
+            self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.AI_INVENTORY)
+            return True
+        except Exception as e:
+            self.set_log(log_type=AWSLogType.ERROR, topic=AWSResourceType.AI_INVENTORY, msg=e)
+            return False
+    #Method: UPSERT
     def load_support_tickets_data(self, data: List[Dict]) -> bool:
         """Load support tickets data with blazing fast upsert"""
         try:
@@ -1323,8 +1815,11 @@ class CoreManager:
                 filtered_record = {k: v for k, v in record.items() if k in ri_sp_fields}
                 filtered_record['account_id'] = self.curr_acct['id']
                 
-                self.db.upsert('ri_sp_daily_savings', filtered_record, 
-                              ['account_id', 'subscription_id', 'date_from', 'date_to', 'reservation_type'], self.stats)
+                # Keys match ri_sp_daily_savings_unique on live: (account_id,
+                # subscription_id, date_to, reservation_type). date_from was in the caller
+                # here but not in the constraint, so ON CONFLICT would fail
+                self.db.upsert('ri_sp_daily_savings', filtered_record,
+                              ['account_id', 'subscription_id', 'date_to', 'reservation_type'], self.stats)
 
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.RI_SP_SAVINGS)
             return True
@@ -1425,14 +1920,40 @@ class CoreManager:
             'compute_optimizer' : self.load_compute_optimizer_data,
             'ri_sp_savings'     : self.load_ri_sp_savings_data,
             'config_inventory'  : self.load_config_inventory_data,
+            'ai_inventory'      : self.load_ai_inventory_data,
             'support_tickets'   : self.load_support_tickets_data,
             'logs'              : self.load_logs_data
         }
         
+        # Per-loader timing when DEBUG is on. The pool's overall duration equals the slowest
+        # loader's time, so a hidden bottleneck in one function silently caps the whole run.
+        # Wrapping in _wrap when DEBUG is off is a no-op that returns fn unchanged
+        import time as _t
+        def _wrap(name, fn):
+            if not DEBUG:
+                return fn
+            def _inner(arg):
+                _start = _t.time()
+                try:
+                    return fn(arg)
+                finally:
+                    print(f"{TIMING} loader {name}: {round(_t.time() - _start, 2)}s")
+            return _inner
+
+        # Loaders whose resolve-close step must run even on an empty payload.
+        # data.get(attr) is falsy for an empty list, which would skip the loader
+        # entirely - but for ai_inventory an empty [] is a meaningful signal that
+        # every previously-active resource should flip to INACTIVE. The key must
+        # exist in `data` for its .get() to differ from a truly missing key
+        _run_when_empty = {'ai_inventory'}
+
         with ThreadPoolExecutor(max_workers=15) as executor:
-            futures = {executor.submit(loader, data[attr]): attr 
-                       for attr, loader in loaders.items() if data.get(attr)}
-            
+            futures = {
+                executor.submit(_wrap(attr, loader), data.get(attr, [])): attr
+                for attr, loader in loaders.items()
+                if data.get(attr) or (attr in _run_when_empty and attr in data)
+            }
+
             for future in as_completed(futures):
                 attr = futures[future]
                 try:
@@ -1441,7 +1962,7 @@ class CoreManager:
                     #print(f"{ERROR} Error loading {attr}: {e}")
                     print(f"{ERROR}: {e}")
                     continue
-        
+
         self.stats['LOADED'] += 1
         return self.stats
 

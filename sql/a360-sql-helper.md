@@ -4,6 +4,14 @@
 Copy paste it in the quyery editor to remove the views
 
 ```
+-- v2.9.3 additions (drop children before parents in the exposure chain)
+DROP VIEW IF EXISTS view_exposure_finding_trait;
+DROP VIEW IF EXISTS view_exposure_contributed_finding;
+DROP VIEW IF EXISTS view_exposure_findings;
+DROP VIEW IF EXISTS view_threat_findings;
+DROP VIEW IF EXISTS view_security_standards;
+DROP VIEW IF EXISTS view_ai_inventory;
+-- v2.9.21 baseline views
 DROP VIEW IF EXISTS view_waf_rules_detailed;
 DROP VIEW IF EXISTS view_waf_rules;
 DROP VIEW IF EXISTS view_trusted_advisor_checks;
@@ -29,12 +37,14 @@ DROP VIEW IF EXISTS view_non_compliant_resources;
 DROP VIEW IF EXISTS view_config_inventory_summary;
 DROP VIEW IF EXISTS view_config_inventory_account_summary;
 DROP VIEW IF EXISTS view_config_inventory;
+DROP VIEW IF EXISTS view_compute_optimizer_summary;
 DROP VIEW IF EXISTS view_compute_optimizer;
 DROP VIEW IF EXISTS view_cloudtrail_logs;
 DROP VIEW IF EXISTS view_certificates;
 DROP VIEW IF EXISTS view_application_signals;
 DROP VIEW IF EXISTS view_alternate_contacts;
 DROP VIEW IF EXISTS view_acct_summary;
+DROP VIEW IF EXISTS view_acct_support_tickets;
 DROP VIEW IF EXISTS view_acct_serv_cost;
 DROP VIEW IF EXISTS view_acct_serv;
 DROP VIEW IF EXISTS view_acct_security_findings_summary;
@@ -115,7 +125,25 @@ TRUNCATE TABLE
     application_signals,
     resilience_hub_apps,
     support_tickets,
-    ri_sp_daily_savings
+    ri_sp_daily_savings,
+    -- v2.9.3 additions - Security Hub V2 (OCSF) and AI inventory
+    exposure_findings,
+    exposure_contributed_finding,
+    exposure_finding_trait,
+    threat_findings,
+    security_standards,
+    ai_inventory
 RESTART IDENTITY CASCADE;
 
+```
+
+## 4. Swap ai_inventory UNIQUE constraint from resource_guid to resource_id
+
+For clusters where an earlier partial run of the v2.9.3 migration created
+`ai_inventory` with `UNIQUE (account_id, resource_guid)`. Aligns the key with
+`exposure_contributed_finding.resource_uid` so exposures join directly.
+
+```
+ALTER TABLE ai_inventory DROP CONSTRAINT IF EXISTS ai_inventory_account_id_resource_guid_key;
+ALTER TABLE ai_inventory ADD CONSTRAINT ai_inventory_account_id_resource_id_key UNIQUE (account_id, resource_id);
 ```

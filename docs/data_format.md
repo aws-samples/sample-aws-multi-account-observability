@@ -16,6 +16,7 @@ The data is structured as a JSON object with top-level keys representing differe
   "cost": {},
   "security": {},
   "inventory": {},
+  "ai_inventory": [],
   "marketplace": [],
   "trusted_advisor": [],
   "health": [],
@@ -23,11 +24,17 @@ The data is structured as a JSON object with top-level keys representing differe
   "resilience_hub": [],
   "service_resources": [],
   "compute_optimizer": [],
+  "ri_sp_savings": [],
   "config_inventory": [],
   "support_tickets": {},
   "logs": {}
 }
 ```
+
+**Changes in v2.9.3:**
+- `ai_inventory` (new top-level array): Self-hosted AI/ML resource inventory from Security Hub V2's `GetResourcesV2`
+- `security.exposures` (new array), `security.threats` (new array), `security.standards` (new array): Security Hub V2 (OCSF) exposure findings with contributor/trait chain, threat detections, and dated security-standard scores
+- `security.inspector[]` items gain CVSS/EPSS fields (`cve_id`, `cvss_score`, `cvss_severity`, `cvss_version`, `cvss_vector`, `epss_score`, `cve_count`) — moved off the legacy ASFF Security Hub path onto native inspector2 where the scoring is richer
 
 ---
 
@@ -344,6 +351,186 @@ Comprehensive security findings from multiple AWS security services.
   - `first_observed_at` (datetime): When first detected
   - `last_observed_at` (datetime): When last observed
   - `updated_at` (datetime): Last update timestamp
+  - `cve_id` (string): CVE identifier (e.g., "CVE-2026-6893"). Empty for non-CVE findings.
+  - `cvss_score` (float, nullable): Environment-adjusted CVSS score (0.0–10.0). Sourced from `inspectorScore` when available, else falls back to the highest `baseScore` from `packageVulnerabilityDetails.cvss[]`. NULL when neither is present (typically Amazon Linux `ALAS*` advisories).
+  - `cvss_severity` (string): Qualitative severity band derived from `cvss_score` (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `NONE`).
+  - `cvss_version` (string): CVSS spec version (`3.1`, `4.0`, etc.)
+  - `cvss_vector` (string): Full vector string from the chosen `cvss[]` entry.
+  - `epss_score` (float, nullable): EPSS probability (0.0–1.0) from `epss.score`. NULL when absent.
+  - `cve_count` (integer): 1 for the finding's CVE, plus every entry in `relatedVulnerabilities[]` (vendor advisories for the same CVE, e.g. ALAS ids counted alongside).
+
+**CVSS provenance:** Scoring lives here, not on the legacy ASFF Security Hub path. Reason: Security Hub aggregates Inspector, so the only ASFF findings carrying a `Vulnerabilities` array are Inspector's own — putting scores in both places double-counted the same vulnerability across two tables. `_extract_cvss_inspector` in `sender.py` reads the native inspector2 shape (`packageVulnerabilityDetails.cvss[]`, `packageVulnerabilityDetails.vulnerabilityId`, `epss.score`, `inspectorScore`) rather than the ASFF shape.
+
+Validated over 600 live findings: `cvss_severity` matched the AWS severity band 596/600, with the 4 non-matches being correct behavior (2 `UNTRIAGED` findings that have no CVSS band, and 2 Amazon Linux advisories where AWS supplies no scoring at all).
+
+#### 5.10 Exposures (Security Hub V2 / OCSF) — NEW in v2.9.3
+
+Correlated multi-signal findings from Security Hub's V2 (OCSF) surface. Each exposure is a chain: an exposure has one or more contributors, each contributor has one or more traits explaining why it contributes.
+
+- `exposures` (array): Active exposure findings, one entry per exposure
+  - `finding_id` (string): Internal correlation hash (`metadata.uid`). Unique per exposure.
+  - `finding_arn` (string): Console-visible ARN (`finding_info.uid`)
+  - `service` (string): Affected resource type (e.g. `AWS::IAM::User`, `AWS::DynamoDB::Table`)
+  - `title` (string): Brief description
+  - `description` (string): Detailed narrative of the exposure
+  - `severity` (string): `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFORMATIONAL` (upper-cased from OCSF's title-case)
+  - `status` (string): `NEW`, `NOTIFIED`, `RESOLVED`, `SUPPRESSED`
+  - `resource_type` (string): Same as `service` — kept for consistency with legacy findings
+  - `resource_id` (string): Affected resource identifier
+  - `created_at` (datetime): First seen
+  - `updated_at` (datetime): Last updated
+  - `recommendation` (string): Remediation guidance
+  - `compliance_status` (string): Compliance field from OCSF (empty for pure exposures)
+  - `region` (string): AWS region (`global` for IAM-scoped exposures)
+  - `workflow_state` (string): Same lifecycle as `status`
+  - `record_state` (string): Title-cased status (`New`/`Resolved`), preserves the OCSF surface value
+  - `product_name` (string): Typically `Security Hub Exposure Detection`
+  - `company_name` (string): `AWS`
+  - `product_arn` (string): Producer product ARN
+  - `generator_id` (string): Generating rule/detector
+  - `generator` (string): Same as `product_name`
+  - `cve_id`, `cvss_score`, `cvss_severity`, `cvss_version`, `cvss_vector`, `epss_score`, `cve_count`: Same 7 fields as Inspector. Populated only for vulnerability-flavored exposures. NULL/empty on pure IAM/misconfiguration exposures.
+  - `contributed_finding` (array): The evidence chain (see 5.11)
+
+Sender-side collection ([`sender.py`](../scripts/sender.py) `get_security_hub_v2`) filters via `class_name=Detection Finding` + `finding_info.types PREFIX Exposure`, and scopes to `status IN ('New', 'Notified')` — the API-level filter for active exposures. No date filter, because V2 exposures are long-lived correlated findings representing current state, not point-in-time events.
+
+**Resolve-close semantics:** an exposure in the DB but absent from the current payload is marked `status='RESOLVED'` by the receiver rather than deleted. Row is preserved as history. If the exposure reappears in a later payload, its `status` returns to `NEW`.
+
+**Example:**
+```json
+{
+  "finding_id": "e17e79fa975e02b4221e2c66dca99215ba211b96292acb1e0955fea61a0761b7",
+  "finding_arn": "arn:aws:securityhub:us-east-1:791024703744:exposure:d68a0b03...",
+  "service": "AWS::IAM::User",
+  "title": "Potential Unauthorized Access: IAM user has weak password policies...",
+  "severity": "MEDIUM",
+  "status": "NEW",
+  "resource_type": "AWS::IAM::User",
+  "resource_id": "AIDA3QLF7DEAMGDWGU7RY",
+  "created_at": "2026-06-19T04:25:56.743Z",
+  "updated_at": "2026-08-06T02:50:38.786Z",
+  "region": "global",
+  "workflow_state": "NEW",
+  "record_state": "New",
+  "cve_id": "", "cvss_score": null,
+  "contributed_finding": [ /* see 5.11 */ ]
+}
+```
+
+#### 5.11 Contributed Findings (nested under each exposure) — NEW in v2.9.3
+
+Each entry represents one piece of evidence contributing to an exposure. Contributors can be actual Security Hub findings (e.g. a failed IAM.7 control) OR resource-configuration observations (a bare IAM user with `is_finding=false`).
+
+- `contributed_finding[]` (nested array under each exposure)
+  - `finding_id` (string): The contributor's own uid. Same `finding_id` can appear under **multiple exposures** in the same account — see cross-exposure protection below.
+  - `finding_arn` (string): Contributor's ARN if resolvable, otherwise empty
+  - `source` (string): Product name (`Security Hub`, `Inspector`, empty for resource observations)
+  - `title` (string): Contributor's title
+  - `is_finding` (boolean): True if the contributor is a real finding (has an ARN, can be looked up), false if it's a resource-configuration observation
+  - `resource_uid` (string): The resource identifier this contributor points at
+  - `status` (string): `NEW` when the contributor is present in this payload. Sender stamps this at emission time so a reappearing contributor is re-opened correctly by the receiver's upsert.
+  - `workflow_state` (string): Same as `status`
+  - `cve_id`, `cvss_score`, `cvss_severity`, `cvss_version`, `cvss_vector`, `epss_score`, `cve_count`: Populated when the contributor is a resolvable Inspector finding. Empty/NULL for non-vulnerability contributors.
+  - `trait_count` (integer): Number of traits carried on this contributor
+  - `trait_categories` (string): Comma-separated categories of the **contributing** traits only (e.g. `"Impact, Vulnerability"`)
+  - `trait_names` (string): Pipe-separated names of every trait (contributing + contextual)
+  - `traits` (array): The individual trait records (see 5.12)
+
+**Cross-exposure protection:** The receiver's resolve-close for contributors uses a `NOT EXISTS` check — a contributor's `finding_id` is only marked `RESOLVED` if it isn't still tied to any other active exposure in the same account. Example: an IAM user contributing to three separate exposures for weak password policy stays active until all three exposures resolve.
+
+#### 5.12 Traits (nested under each contributor) — NEW in v2.9.3
+
+Traits explain *why* an exposure exists. Each trait names a specific weakness of the resource the contributor identifies.
+
+- `traits[]` (nested array under each contributed_finding)
+  - `category` (string): Trait taxonomy — `Vulnerability`, `Misconfiguration`, `Impact`, `Assumability`, or empty
+  - `name` (string): Full trait text (e.g. `"The IAM user has an inject code privileged executor access path"`)
+  - `type` (string): `Contributing Trait` (part of the causal chain) or `Contextual Trait` (describes the surrounding resource)
+
+**Example — one exposure with three contributors and their traits:**
+```json
+"contributed_finding": [
+  {
+    "finding_id": "AIDA3QLF7DEAMGDWGU7RY",
+    "source": "",
+    "title": "AWS::IAM::User ruvigh AIDA3QLF7DEAMGDWGU7RY",
+    "is_finding": false,
+    "status": "NEW",
+    "workflow_state": "NEW",
+    "trait_count": 5,
+    "trait_categories": "Impact",
+    "trait_names": "The IAM user has an inject code... | ... | The IAM user has a service admin policy",
+    "traits": [
+      {"category": "Impact",           "name": "The IAM user has an inject code privileged executor access path", "type": "Contributing Trait"},
+      {"category": "Misconfiguration", "name": "The IAM user has an administrative access policy",                "type": "Contextual Trait"}
+    ]
+  },
+  {
+    "finding_id": "f3b802923567047ec2bb2cba69d67aac76d85a61835bcf4b506187ee461267a9",
+    "source": "Security Hub",
+    "title": "Password policies for IAM users should have strong configurations",
+    "is_finding": true,
+    "status": "NEW",
+    "cvss_score": null,
+    "trait_count": 1,
+    "traits": [{"category": "Misconfiguration", "name": "The AWS Account of the IAM user has weak password policies", "type": "Contributing Trait"}]
+  }
+]
+```
+
+#### 5.13 Threats (Security Hub V2 / OCSF) — NEW in v2.9.3
+
+GuardDuty-sourced (and other) threat detections from the V2 surface. Flat table, no contributor chain in the current sender output.
+
+- `threats` (array)
+  - `finding_id`, `finding_arn`, `service`, `title`, `description`, `severity`, `status`, `resource_type`, `resource_id`, `created_at`, `updated_at`, `recommendation`, `region`, `workflow_state`, `record_state`, `product_name`, `company_name`, `product_arn`, `generator_id`, `generator`: Same as exposures (see 5.10)
+  - `finding_type` (string): OCSF finding_info.types entry, minus the `Threats` marker (e.g. `Discovery:IAMUser/AnomalousBehavior`)
+  - `analytic_type` (string): Detection method — typically `Behavioral` for GuardDuty
+  - `actor_name` (string): Principal name that triggered the detection
+  - `actor_uid` (string): Principal UID (falls back to `uid` if `uid_alt` is absent)
+  - `api_operation` (string): API call that triggered the detection (e.g. `ListServiceSpecificCredentials`)
+  - `api_service` (string): AWS service the API belongs to (e.g. `iam.amazonaws.com`)
+  - `source_ip` (string): Source IP of the caller
+  - `source_country` (string): Country name resolved from the source IP
+  - `count` (integer): Occurrence count. Written to `threat_findings.occurrence_count` in the DB (renamed to avoid collision with the SQL `COUNT()` aggregate function).
+
+**Sender filter:** `class_name=Detection Finding` + `finding_info.types PREFIX_NOT_EQUALS Exposure` — i.e. Detection Findings that aren't exposures. Same `status IN ('New', 'Notified')` filter and same resolve-close semantics as exposures.
+
+**Threats deliberately carry NO CVSS fields** — GuardDuty findings score threats via GuardDuty's own severity scale (0-10 numeric), not CVSS. The `severity` string field captures this.
+
+#### 5.14 Security Standards (Security Hub V2) — NEW in v2.9.3
+
+Daily snapshot of Security Hub standard compliance scores. Feeds the security posture trend chart.
+
+- `standards` (array)
+  - `standard_name` (string): Short-form name (e.g. `cis-aws-foundations-benchmark/v/1.2.0`)
+  - `standard_arn` (string): Full ARN
+  - `subscription_arn` (string): This account's subscription ARN
+  - `status` (string): Subscription state (`READY`, `PENDING`, etc.)
+  - `passed` (integer): Number of controls in `PASSED` state
+  - `failed` (integer): Number of controls in `FAILED` state
+  - `score` (integer): Percentage — `round(passed / (passed + failed) * 100)`
+  - `date_from` (date, `YYYY-MM-DD`): Collection window start — stamped by the sender at emission time
+  - `date_to` (date, `YYYY-MM-DD`): Collection window end — same as above
+
+**Key design point:** the DB's UNIQUE key on `security_standards` is `(account_id, standard_arn, date_from)`. Every daily run writes a **new row** per standard, not an in-place update. `score` over `date_from` is the trend axis. Without `date_from` in the key, yesterday's row would be overwritten every day and no trending would be possible.
+
+**Example:**
+```json
+[
+  {
+    "standard_name": "cis-aws-foundations-benchmark/v/1.2.0",
+    "standard_arn": "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0",
+    "subscription_arn": "arn:aws:securityhub:us-east-1:791024703744:subscription/cis-aws-foundations-benchmark/v/1.2.0",
+    "status": "READY",
+    "passed": 39,
+    "failed": 34,
+    "score": 53,
+    "date_from": "2026-08-05",
+    "date_to": "2026-08-06"
+  }
+]
+```
 
 ---
 
@@ -378,6 +565,54 @@ EC2 instance inventory from Systems Manager with SSM agent compliance.
   - `severity` (string): Severity level
   - `state` (string): Installation status
   - `installed_time` (datetime): When the patch was installed
+
+---
+
+### 6b. AI Inventory Section — NEW in v2.9.3
+
+Self-hosted AI/ML resource inventory from Security Hub V2's `GetResourcesV2` API. Distinct from Section 6 (Inventory), which covers EC2/SSM inventory. This is a top-level array (not nested under `security`) because it describes resources, not findings.
+
+**Array of Objects with Fields:**
+- `resource_guid` (string): Security Hub's stable GUID for the resource
+- `resource_id` (string): Short-form resource ID (e.g. `gateway-quick-start-f3d764-axpqf6sqss`). For child resources (like `GatewayTarget`) this is a composite `<parent>|<child>`.
+- `resource_name` (string): Human-readable name
+- `resource_type` (string): Security Hub's OCSF-style type (e.g. `AWS::SageMaker::Endpoint`, `AWS::Bedrock::Agent`)
+- `resource_category` (string): Always `AI/ML` (filter used at query time)
+- `resource_sub_category` (string): Finer classification (e.g. `Model`, `Agent`, `AgentFramework`, `AgentToolsAndIdentity`, `ExternalEndpoint`, `Development`, `ModelServing`)
+- `discovery_type` (string): How Security Hub discovered the resource
+- `region` (string): AWS region
+- `account_id` (string): 12-digit AWS account ID
+- `created_at` (datetime): `ResourceCreationTimeDt`
+- `tags` (array): Resource tags as returned by Security Hub
+- `host_resource_guid` (string): GUID of the hosting resource (for AI resources running on top of another resource)
+- `host_resource_type` (string): Type of the hosting resource
+- `canonical_id` (string): Provider-canonical identifier
+- `model_count` (integer): `SelfHostedAIModelResourceCount`
+- `agent_count` (integer): `SelfHostedAIAgentResourceCount`
+- `total_ai_count` (integer): `SelfHostedTotalAIResourceCount`
+- `finding` (array of contributor refs): Populated by `_link_findings_to_root` in the sender — each entry is a reference to a Security Hub V2 finding that concerns this resource, keyed on `resource_id` (with a fallback to the parent id for composite child resources). Same shape as `contributed_finding[]` in Section 5.11 minus the traits.
+
+**Example:**
+```json
+[
+  {
+    "resource_guid": "6c4b7c26-...",
+    "resource_id": "gateway-quick-start-f3d764-axpqf6sqss",
+    "resource_name": "gateway-quick-start-f3d764-axpqf6sqss",
+    "resource_type": "AWS::Bedrock::Agent",
+    "resource_category": "AI/ML",
+    "resource_sub_category": "Agent",
+    "region": "us-east-1",
+    "account_id": "791024703744",
+    "created_at": "2026-07-11T09:22:41Z",
+    "host_resource_type": "AWS::EC2::Instance",
+    "model_count": 0,
+    "agent_count": 1,
+    "total_ai_count": 1,
+    "finding": []
+  }
+]
+```
 
 ---
 
@@ -639,5 +874,6 @@ s3://analytics-bucket/data/137433690462/ap-southeast-1/2026-01-08_DAILY.json
 
 ## Version History
 
+- **v2.9.3** (August 2026): Security Hub V2 (OCSF) exposures/threats/contributor/trait chain, security standards daily snapshots for score trending, AI/ML resource inventory from `GetResourcesV2`, CVSS/EPSS scoring moved from ASFF Security Hub path onto native `inspector2` findings, per-contributor `status`/`workflow_state` fields, resolve-close lifecycle for exposures and threats with cross-exposure `NOT EXISTS` protection for shared contributors, receiver `INSERT ... ON CONFLICT ... RETURNING xmax = 0` rewrite (733s → 21s runtime, ~35× faster).
 - **v2.x** (January 2026): Added multi-region support, support tickets, enhanced compliance tracking
 - **v1.x** (Pre-January 2026): Initial version with basic observability features

@@ -620,6 +620,12 @@ Resources:
               - securityhub:DescribeHub
               - securityhub:GetEnabledStandards
               - securityhub:ListConfigurationPolicies
+              # AI/ML inventory drives _get_ai_inventory via GetResourcesV2. Both action
+              # names granted because AWS confirms the V1/V2 alias for GetFindings but does
+              # not state it explicitly for GetResources - IAM silently ignores whichever
+              # action name Security Hub does not use, so granting both is safe
+              - securityhub:GetResources
+              - securityhub:GetResourcesV2
             Resource: "*"
           - Sid: GuardDutyAccess
             Effect: Allow
@@ -637,13 +643,26 @@ Resources:
               - iam:ListMFADevices
               - iam:ListAccessKeys
             Resource: !Sub "arn:aws:iam::${AWS::AccountId}:*"
-          - Sid: KMSAccess
+          - Sid: KMSListAccess
             Effect: Allow
+            # kms:ListKeys does NOT support resource-level permissions and must be
+            # granted with Resource "*". Bundling it with the key-scoped actions below
+            # caused an AccessDeniedException on ListKeys itself even though the caller
+            # had access to every key it wanted to list
             Action:
               - kms:ListKeys
+            Resource: "*"
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
               - kms:DescribeKey
               - kms:GetKeyRotationStatus
-            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+            # get_kms_security in sender.py fans out to BOTH the deployment region and
+            # us-east-1 (global-service KMS keys, e.g. CloudFront's, are homed in us-east-1).
+            # If you deploy in us-east-1 the two ARNs resolve identically and IAM dedupes
+            Resource:
+              - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              - !Sub "arn:aws:kms:us-east-1:${AWS::AccountId}:key/*"
           - Sid: KMSDecryptAccess
             Effect: Allow
             Action:

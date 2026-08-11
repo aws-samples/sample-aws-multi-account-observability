@@ -106,7 +106,8 @@ CREATE TABLE service_costs (
     service_name VARCHAR(255) NOT NULL,
     cost NUMERIC(20,10) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    region TEXT DEFAULT 'Global'
+    region TEXT DEFAULT 'Global',
+    UNIQUE (cost_report_id, service_name, region)
 );
 
 -- Create the forecast table
@@ -119,7 +120,8 @@ CREATE TABLE cost_forecasts (
     prediction_interval_lower_bound NUMERIC(20,10),
     prediction_interval_upper_bound NUMERIC(20,10),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    region TEXT DEFAULT 'Global'
+    region TEXT DEFAULT 'Global',
+    UNIQUE (cost_report_id, period_start, region)
 );
 
 
@@ -180,7 +182,8 @@ CREATE TABLE products (
     position VARCHAR(255),
     description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (name)
 );
 
 -- Create the product_accounts junction table
@@ -221,7 +224,8 @@ CREATE TABLE log_messages (
     log_id INTEGER NOT NULL REFERENCES logs(id) ON DELETE CASCADE,
     message TEXT NOT NULL,
     message_type TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (log_id, message_type)
 );
 
 /* NEW TABLES FOR EXPANDED DATA - ADD TO EXISTING SCHEMA */
@@ -252,7 +256,8 @@ CREATE TABLE non_compliant_resources (
     annotation TEXT,
     evaluation_mode TEXT,
     conformance_pack TEXT,
-    status VARCHAR(255) NOT NULL DEFAULT 'OPEN'
+    status VARCHAR(255) NOT NULL DEFAULT 'OPEN',
+    UNIQUE (config_report_id, resource_id, rule_name)
 );
 
 -- Create new service_resources table
@@ -280,7 +285,8 @@ CREATE TABLE service_resources (
     min_size INTEGER,
     max_size INTEGER,
     available_ip_count INTEGER,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, service_name, resource_id)
 );
 
 -- Create indexes
@@ -293,7 +299,7 @@ CREATE INDEX idx_service_resources_state ON service_resources(state);
 
 
 
--- Compute Optimizer 
+-- Compute Optimizer
 CREATE TABLE compute_optimizer (
     id SERIAL PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -315,7 +321,8 @@ CREATE TABLE compute_optimizer (
     cpu_utilization_max DECIMAL(5,2),
     memory_utilization_avg DECIMAL(5,2),
     migration_effort VARCHAR(50),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (resource_arn)
 );
 
 -- Create indexes
@@ -380,7 +387,8 @@ CREATE TABLE guard_duty_findings (
     confidence NUMERIC(3,1),
     region VARCHAR(50),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, detector_id)
 );
 
 
@@ -395,7 +403,8 @@ CREATE TABLE kms_keys (
     creation_date TIMESTAMP WITH TIME ZONE,
     enabled BOOLEAN DEFAULT TRUE,
     key_rotation_enabled BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (key_id)
 );
 
 CREATE TABLE waf_rules (
@@ -411,7 +420,8 @@ CREATE TABLE waf_rules (
     logging_enabled BOOLEAN DEFAULT FALSE,
     geo_blocking_enabled BOOLEAN DEFAULT FALSE,
     blocked_countries TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (waf_id)
 );
 
 -- WAF Rules detailed table
@@ -526,7 +536,8 @@ CREATE TABLE inventory_applications (
     architecture TEXT,
     application_type TEXT,
     install_time TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, instance_id, name, version)
 );
 
 CREATE TABLE inventory_patches (
@@ -538,7 +549,8 @@ CREATE TABLE inventory_patches (
     severity VARCHAR(50),
     state VARCHAR(50),
     installed_time TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (instance_id, title)
 );
 
 -- Marketplace usage
@@ -675,9 +687,181 @@ CREATE TABLE ri_sp_daily_savings (
     description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT ri_sp_daily_savings_unique 
+    CONSTRAINT ri_sp_daily_savings_unique
     UNIQUE (account_id, subscription_id, date_to, reservation_type)
 );
+
+
+/* Security Hub V2 (OCSF) - exposures, threats, standards */
+
+-- Exposure findings - one row per exposure
+CREATE TABLE exposure_findings (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    finding_id VARCHAR(255) NOT NULL,
+    finding_arn VARCHAR(512),
+    service VARCHAR(255),
+    title TEXT,
+    description TEXT,
+    severity VARCHAR(50),
+    status VARCHAR(50),
+    resource_type VARCHAR(255),
+    resource_id VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    recommendation TEXT,
+    compliance_status VARCHAR(50),
+    region VARCHAR(50),
+    workflow_state VARCHAR(50),
+    record_state VARCHAR(50),
+    product_name VARCHAR(255),
+    company_name VARCHAR(255),
+    product_arn VARCHAR(512),
+    generator_id VARCHAR(512),
+    generator VARCHAR(255),
+    cve_id VARCHAR(50),
+    cvss_score NUMERIC(4,1),
+    cvss_severity VARCHAR(20),
+    cvss_version VARCHAR(10),
+    cvss_vector VARCHAR(255),
+    epss_score NUMERIC(8,6),
+    cve_count INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (finding_id)
+);
+
+-- Contributor findings - child of exposure_findings, one row per contributor
+--
+-- status / workflow_state are nullable because Security Hub does not emit a
+-- per-contributor status. The sender stamps 'NEW' at emission time so the
+-- receiver upsert can flip a resurfaced contributor out of 'RESOLVED', but if
+-- a future sender stops stamping them, NULL is still valid and the receiver's
+-- resolve-close treats NULL as still-active via IS DISTINCT FROM 'RESOLVED'
+CREATE TABLE exposure_contributed_finding (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    exposure_finding_id INTEGER NOT NULL REFERENCES exposure_findings(id) ON DELETE CASCADE,
+    finding_id VARCHAR(255) NOT NULL,
+    finding_arn VARCHAR(512),
+    source VARCHAR(255),
+    title TEXT,
+    is_finding BOOLEAN NOT NULL DEFAULT FALSE,
+    resource_uid VARCHAR(512),
+    status VARCHAR(50),
+    workflow_state VARCHAR(50),
+    cve_id VARCHAR(50),
+    cvss_score NUMERIC(4,1),
+    cvss_severity VARCHAR(20),
+    cvss_version VARCHAR(10),
+    cvss_vector VARCHAR(255),
+    epss_score NUMERIC(8,6),
+    cve_count INTEGER NOT NULL DEFAULT 0,
+    trait_count INTEGER NOT NULL DEFAULT 0,
+    trait_categories VARCHAR(255),
+    trait_names TEXT,
+    UNIQUE (exposure_finding_id, finding_id)
+);
+
+-- Trait entries - child of exposure_contributed_finding, one row per trait
+--
+-- UNIQUE NULLS NOT DISTINCT is a PG15+ feature that treats NULL as equal to
+-- itself, so idempotent re-runs of the same trait set work regardless of
+-- whether category is NULL
+CREATE TABLE exposure_finding_trait (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    contributed_finding_id INTEGER NOT NULL REFERENCES exposure_contributed_finding(id) ON DELETE CASCADE,
+    category VARCHAR(64),
+    name VARCHAR(512) NOT NULL,
+    type VARCHAR(64) NOT NULL,
+    UNIQUE NULLS NOT DISTINCT (contributed_finding_id, name, type)
+);
+
+-- Threat findings - flat table, no children in the current sender output
+--
+-- occurrence_count (not `count`) because `count` collides with the SQL COUNT()
+-- aggregate function and would need quoting in every query. Sender's payload
+-- key is `count`; the receiver maps it during upsert
+CREATE TABLE threat_findings (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    finding_id VARCHAR(255) NOT NULL,
+    finding_arn VARCHAR(512),
+    service VARCHAR(255),
+    title TEXT,
+    description TEXT,
+    severity VARCHAR(50),
+    status VARCHAR(50),
+    resource_type VARCHAR(255),
+    resource_id VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    recommendation TEXT,
+    region VARCHAR(50),
+    workflow_state VARCHAR(50),
+    record_state VARCHAR(50),
+    product_name VARCHAR(255),
+    company_name VARCHAR(255),
+    product_arn VARCHAR(512),
+    generator_id VARCHAR(512),
+    generator VARCHAR(255),
+    finding_type VARCHAR(255),
+    analytic_type VARCHAR(50),
+    actor_name VARCHAR(255),
+    actor_uid VARCHAR(255),
+    api_operation VARCHAR(255),
+    api_service VARCHAR(255),
+    source_ip VARCHAR(45),
+    source_country VARCHAR(100),
+    occurrence_count INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (finding_id)
+);
+
+-- Security standards - one row per standard per collection day. date_from is
+-- part of the unique key so the same standard writes a new row every day,
+-- giving score history for trend charts
+CREATE TABLE security_standards (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    standard_name VARCHAR(255) NOT NULL,
+    standard_arn VARCHAR(512) NOT NULL,
+    subscription_arn VARCHAR(512),
+    status VARCHAR(50),
+    passed INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    score INTEGER NOT NULL DEFAULT 0,
+    date_from DATE NOT NULL,
+    date_to DATE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, standard_arn, date_from)
+);
+
+-- Self-hosted AI/ML resource inventory from Security Hub V2 GetResourcesV2.
+-- Flat table, one row per AI/ML resource per account. resource_id joins to
+-- exposure_contributed_finding.resource_uid at query time for finding correlation
+CREATE TABLE ai_inventory (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    resource_guid VARCHAR(255) NOT NULL,
+    resource_id VARCHAR(512) NOT NULL,
+    resource_name VARCHAR(512),
+    resource_type VARCHAR(255),
+    resource_category VARCHAR(100),
+    resource_sub_category VARCHAR(100),
+    discovery_type VARCHAR(100),
+    region VARCHAR(50),
+    host_resource_guid VARCHAR(255),
+    host_resource_type VARCHAR(255),
+    canonical_id VARCHAR(512),
+    model_count INTEGER NOT NULL DEFAULT 0,
+    agent_count INTEGER NOT NULL DEFAULT 0,
+    total_ai_count INTEGER NOT NULL DEFAULT 0,
+    tags JSONB,
+    status VARCHAR(50),
+    created_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, resource_id)
+);
+
 
 /* Set Indexes */
 
@@ -747,3 +931,39 @@ CREATE INDEX idx_ri_sp_savings_type ON ri_sp_daily_savings(reservation_type);
 CREATE INDEX idx_ri_sp_savings_service ON ri_sp_daily_savings(service);
 CREATE INDEX idx_ri_sp_savings_state ON ri_sp_daily_savings(state);
 CREATE INDEX idx_ri_sp_savings_region ON ri_sp_daily_savings(region);
+
+-- Security Hub V2 - exposures
+CREATE INDEX idx_exposure_findings_account_id ON exposure_findings(account_id);
+CREATE INDEX idx_exposure_findings_severity ON exposure_findings(severity);
+CREATE INDEX idx_exposure_findings_status ON exposure_findings(status);
+CREATE INDEX idx_exposure_findings_resource_id ON exposure_findings(resource_id);
+CREATE INDEX idx_exposure_findings_cve_id ON exposure_findings(cve_id);
+
+-- Security Hub V2 - contributors
+CREATE INDEX idx_ecf_account_id ON exposure_contributed_finding(account_id);
+CREATE INDEX idx_ecf_exposure_finding_id ON exposure_contributed_finding(exposure_finding_id);
+CREATE INDEX idx_ecf_cve_id ON exposure_contributed_finding(cve_id);
+CREATE INDEX idx_ecf_status ON exposure_contributed_finding(status);
+
+-- Security Hub V2 - traits
+CREATE INDEX idx_eft_account_id ON exposure_finding_trait(account_id);
+CREATE INDEX idx_eft_contributed_finding_id ON exposure_finding_trait(contributed_finding_id);
+CREATE INDEX idx_eft_category ON exposure_finding_trait(category);
+
+-- Security Hub V2 - threats
+CREATE INDEX idx_threat_findings_account_id ON threat_findings(account_id);
+CREATE INDEX idx_threat_findings_severity ON threat_findings(severity);
+CREATE INDEX idx_threat_findings_status ON threat_findings(status);
+CREATE INDEX idx_threat_findings_finding_type ON threat_findings(finding_type);
+CREATE INDEX idx_threat_findings_actor_uid ON threat_findings(actor_uid);
+
+-- Security Hub V2 - standards
+CREATE INDEX idx_security_standards_account_id ON security_standards(account_id);
+CREATE INDEX idx_security_standards_name ON security_standards(standard_name);
+CREATE INDEX idx_security_standards_date_from ON security_standards(date_from);
+
+-- Security Hub V2 - AI inventory
+CREATE INDEX idx_ai_inventory_account_id ON ai_inventory(account_id);
+CREATE INDEX idx_ai_inventory_resource_type ON ai_inventory(resource_type);
+CREATE INDEX idx_ai_inventory_resource_id ON ai_inventory(resource_id);
+CREATE INDEX idx_ai_inventory_status ON ai_inventory(status);

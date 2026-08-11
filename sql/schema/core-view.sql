@@ -1253,3 +1253,154 @@ FROM
         ORDER BY account_id, id
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
+
+--43. Security Hub V2 - exposure findings view
+CREATE OR REPLACE VIEW view_exposure_findings AS
+SELECT
+    ef.*,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    exposure_findings ef
+    JOIN accounts a ON ef.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+--44. Security Hub V2 - exposure contributed finding view
+CREATE OR REPLACE VIEW view_exposure_contributed_finding AS
+SELECT
+    ecf.*,
+    ef.finding_id as exposure_finding_uid,
+    ef.title as exposure_title,
+    ef.severity as exposure_severity,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    exposure_contributed_finding ecf
+    JOIN accounts a ON ecf.account_id = a.id
+    JOIN exposure_findings ef ON ecf.exposure_finding_id = ef.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+--45. Security Hub V2 - exposure finding trait view
+CREATE OR REPLACE VIEW view_exposure_finding_trait AS
+SELECT
+    eft.*,
+    ecf.finding_id as contributed_finding_uid,
+    ecf.title as contributed_title,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    exposure_finding_trait eft
+    JOIN accounts a ON eft.account_id = a.id
+    JOIN exposure_contributed_finding ecf ON eft.contributed_finding_id = ecf.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+--46. Security Hub V2 - threat findings view
+CREATE OR REPLACE VIEW view_threat_findings AS
+SELECT
+    tf.*,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    threat_findings tf
+    JOIN accounts a ON tf.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+--47. Security Hub V2 - security standards view
+CREATE OR REPLACE VIEW view_security_standards AS
+SELECT
+    ss.*,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    security_standards ss
+    JOIN accounts a ON ss.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
+
+--48. Security Hub V2 - AI inventory view
+CREATE OR REPLACE VIEW view_ai_inventory AS
+SELECT
+    ai.*,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM
+    ai_inventory ai
+    JOIN accounts a ON ai.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;
