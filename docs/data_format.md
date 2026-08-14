@@ -83,23 +83,6 @@ Contains AWS account metadata and contact information.
   - `operations` (object): Operations contact information (same structure as billing)
   - `security` (object): Security contact information (same structure as billing)
 
-**Example:**
-```json
-{
-  "account_id": "123456789101",
-  "account_name": "appc",
-  "region": "ap-southeast-1",
-  "account_type": "PRODUCTION",
-  "partner_name": "AWS",
-  "customer_name": "Amazon",
-  "contact_info": {
-    "city": "Seattle",
-    "country_code": "US",
-    "postal_code": "98108"
-  }
-}
-```
-
 ---
 
 ### 2. Config Section
@@ -123,18 +106,6 @@ AWS Config compliance data and non-compliant resources.
   - `annotation` (string): Additional context about the finding
   - `evaluation_mode` (string): How the rule was evaluated
 
-**Example:**
-```json
-{
-  "date_from": "2026-01-07",
-  "date_to": "2026-01-08",
-  "compliance_score": 42.34,
-  "total_rules": 111,
-  "compliant_rules": 47,
-  "non_compliant_rules": 64,
-  "non_compliant_resources": []
-}
-```
 
 ---
 
@@ -152,21 +123,6 @@ AWS service usage and costs aggregated by service.
 - `utilization` (float): Utilization metric value (optional)
 - `utilization_unit` (string): Unit of measurement for utilization (optional)
 
-**Example:**
-```json
-[
-  {
-    "service": "Amazon Relational Database Service",
-    "usage_types": "Aggregated",
-    "date_from": "2026-01-07",
-    "date_to": "2026-01-08",
-    "cost": 69.9057927817,
-    "currency": "USD",
-    "utilization": null,
-    "utilization_unit": null
-  }
-]
-```
 
 ---
 
@@ -192,29 +148,6 @@ Comprehensive cost analysis including current, previous, and forecast data.
     - `start` (date): Forecast start date
     - `end` (date): Forecast end date
   - `amount` (float): Predicted cost amount
-
-**Example:**
-```json
-{
-  "account_id": "123456789101",
-  "current_period_cost": 421.52,
-  "previous_period_cost": 478.63,
-  "cost_difference": -57.12,
-  "cost_difference_percentage": -11.93,
-  "top_services": [
-    {
-      "service": "Amazon RDS",
-      "cost": 69.91
-    }
-  ],
-  "forecast": [
-    {
-      "period": {"start": "2026-01-01", "end": "2026-02-01"},
-      "amount": 14476.25
-    }
-  ]
-}
-```
 
 ---
 
@@ -396,27 +329,6 @@ Sender-side collection ([`sender.py`](../scripts/sender.py) `get_security_hub_v2
 
 **Resolve-close semantics:** an exposure in the DB but absent from the current payload is marked `status='RESOLVED'` by the receiver rather than deleted. Row is preserved as history. If the exposure reappears in a later payload, its `status` returns to `NEW`.
 
-**Example:**
-```json
-{
-  "finding_id": "e17e79fa975e02b4221e2c66dca99215ba211b96292acb1e0955fea61a0761b7",
-  "finding_arn": "arn:aws:securityhub:us-east-1:12345678910:exposure:d68a0b03...",
-  "service": "AWS::IAM::User",
-  "title": "Potential Unauthorized Access: IAM user has weak password policies...",
-  "severity": "MEDIUM",
-  "status": "NEW",
-  "resource_type": "AWS::IAM::User",
-  "resource_id": "AIDA3QLF7DEAMGDWGU7RY",
-  "created_at": "2026-06-19T04:25:56.743Z",
-  "updated_at": "2026-08-06T02:50:38.786Z",
-  "region": "global",
-  "workflow_state": "NEW",
-  "record_state": "New",
-  "cve_id": "", "cvss_score": null,
-  "contributed_finding": [ /* see 5.11 */ ]
-}
-```
-
 #### 5.11 Contributed Findings (nested under each exposure) — NEW in v2.9.3
 
 Each entry represents one piece of evidence contributing to an exposure. Contributors can be actual Security Hub findings (e.g. a failed IAM.7 control) OR resource-configuration observations (a bare IAM user with `is_finding=false`).
@@ -447,36 +359,6 @@ Traits explain *why* an exposure exists. Each trait names a specific weakness of
   - `name` (string): Full trait text (e.g. `"The IAM user has an inject code privileged executor access path"`)
   - `type` (string): `Contributing Trait` (part of the causal chain) or `Contextual Trait` (describes the surrounding resource)
 
-**Example — one exposure with three contributors and their traits:**
-```json
-"contributed_finding": [
-  {
-    "finding_id": "AIDA3QLF7DEAMGDWGU7RY",
-    "source": "",
-    "title": "AWS::IAM::User BLANK",
-    "is_finding": false,
-    "status": "NEW",
-    "workflow_state": "NEW",
-    "trait_count": 5,
-    "trait_categories": "Impact",
-    "trait_names": "The IAM user has an inject code... | ... | The IAM user has a service admin policy",
-    "traits": [
-      {"category": "Impact",           "name": "The IAM user has an inject code privileged executor access path", "type": "Contributing Trait"},
-      {"category": "Misconfiguration", "name": "The IAM user has an administrative access policy",                "type": "Contextual Trait"}
-    ]
-  },
-  {
-    "finding_id": "f3b802923567047ec2bb2cba69d67aac76d85a61835bcf4b506187ee461267a9",
-    "source": "Security Hub",
-    "title": "Password policies for IAM users should have strong configurations",
-    "is_finding": true,
-    "status": "NEW",
-    "cvss_score": null,
-    "trait_count": 1,
-    "traits": [{"category": "Misconfiguration", "name": "The AWS Account of the IAM user has weak password policies", "type": "Contributing Trait"}]
-  }
-]
-```
 
 #### 5.13 Threats (Security Hub V2 / OCSF) — NEW in v2.9.3
 
@@ -514,23 +396,6 @@ Daily snapshot of Security Hub standard compliance scores. Feeds the security po
   - `date_to` (date, `YYYY-MM-DD`): Collection window end — same as above
 
 **Key design point:** the DB's UNIQUE key on `security_standards` is `(account_id, standard_arn, date_from)`. Every daily run writes a **new row** per standard, not an in-place update. `score` over `date_from` is the trend axis. Without `date_from` in the key, yesterday's row would be overwritten every day and no trending would be possible.
-
-**Example:**
-```json
-[
-  {
-    "standard_name": "cis-aws-foundations-benchmark/v/1.2.0",
-    "standard_arn": "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0",
-    "subscription_arn": "arn:aws:securityhub:us-east-1:12345678910:subscription/cis-aws-foundations-benchmark/v/1.2.0",
-    "status": "READY",
-    "passed": 39,
-    "failed": 34,
-    "score": 53,
-    "date_from": "2026-08-05",
-    "date_to": "2026-08-06"
-  }
-]
-```
 
 ---
 
@@ -591,28 +456,6 @@ Self-hosted AI/ML resource inventory from Security Hub V2's `GetResourcesV2` API
 - `agent_count` (integer): `SelfHostedAIAgentResourceCount`
 - `total_ai_count` (integer): `SelfHostedTotalAIResourceCount`
 - `finding` (array of contributor refs): Populated by `_link_findings_to_root` in the sender — each entry is a reference to a Security Hub V2 finding that concerns this resource, keyed on `resource_id` (with a fallback to the parent id for composite child resources). Same shape as `contributed_finding[]` in Section 5.11 minus the traits.
-
-**Example:**
-```json
-[
-  {
-    "resource_guid": "6c4b7c26-...",
-    "resource_id": "gateway-quick-start-f3d764-axpqf6sqss",
-    "resource_name": "gateway-quick-start-f3d764-axpqf6sqss",
-    "resource_type": "AWS::Bedrock::Agent",
-    "resource_category": "AI/ML",
-    "resource_sub_category": "Agent",
-    "region": "us-east-1",
-    "account_id": "12345678910",
-    "created_at": "2026-07-11T09:22:41Z",
-    "host_resource_type": "AWS::EC2::Instance",
-    "model_count": 0,
-    "agent_count": 1,
-    "total_ai_count": 1,
-    "finding": []
-  }
-]
-```
 
 ---
 
@@ -796,16 +639,6 @@ AWS Support case tracking.
   - `time_created` (datetime): Creation timestamp
   - `submitted_by` (string): Submitter email
   - `language` (string): Language code (default: "en")
-
-**Example:**
-```json
-{
-  "date_from": "2026-01-07",
-  "date_to": "2026-01-08",
-  "total_tickets": 0,
-  "tickets": []
-}
-```
 
 ---
 
