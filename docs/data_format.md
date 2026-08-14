@@ -86,7 +86,7 @@ Contains AWS account metadata and contact information.
 **Example:**
 ```json
 {
-  "account_id": "137433690462",
+  "account_id": "123456789101",
   "account_name": "appc",
   "region": "ap-southeast-1",
   "account_type": "PRODUCTION",
@@ -196,7 +196,7 @@ Comprehensive cost analysis including current, previous, and forecast data.
 **Example:**
 ```json
 {
-  "account_id": "137433690462",
+  "account_id": "123456789101",
   "current_period_cost": 421.52,
   "previous_period_cost": 478.63,
   "cost_difference": -57.12,
@@ -855,7 +855,7 @@ s3://{bucket}/data/{account_id}/{region}/{YYYY-MM-DD}_{interval}.json
 
 Example:
 ```
-s3://analytics-bucket/data/137433690462/ap-southeast-1/2026-01-08_DAILY.json
+s3://analytics-bucket/data/123456789101/ap-southeast-1/2026-01-08_DAILY.json
 ```
 
 ## Data Retention
