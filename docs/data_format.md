@@ -400,7 +400,7 @@ Sender-side collection ([`sender.py`](../scripts/sender.py) `get_security_hub_v2
 ```json
 {
   "finding_id": "e17e79fa975e02b4221e2c66dca99215ba211b96292acb1e0955fea61a0761b7",
-  "finding_arn": "arn:aws:securityhub:us-east-1:791024703744:exposure:d68a0b03...",
+  "finding_arn": "arn:aws:securityhub:us-east-1:12345678910:exposure:d68a0b03...",
   "service": "AWS::IAM::User",
   "title": "Potential Unauthorized Access: IAM user has weak password policies...",
   "severity": "MEDIUM",
@@ -453,7 +453,7 @@ Traits explain *why* an exposure exists. Each trait names a specific weakness of
   {
     "finding_id": "AIDA3QLF7DEAMGDWGU7RY",
     "source": "",
-    "title": "AWS::IAM::User ruvigh AIDA3QLF7DEAMGDWGU7RY",
+    "title": "AWS::IAM::User BLANK",
     "is_finding": false,
     "status": "NEW",
     "workflow_state": "NEW",
@@ -521,7 +521,7 @@ Daily snapshot of Security Hub standard compliance scores. Feeds the security po
   {
     "standard_name": "cis-aws-foundations-benchmark/v/1.2.0",
     "standard_arn": "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0",
-    "subscription_arn": "arn:aws:securityhub:us-east-1:791024703744:subscription/cis-aws-foundations-benchmark/v/1.2.0",
+    "subscription_arn": "arn:aws:securityhub:us-east-1:12345678910:subscription/cis-aws-foundations-benchmark/v/1.2.0",
     "status": "READY",
     "passed": 39,
     "failed": 34,
@@ -603,7 +603,7 @@ Self-hosted AI/ML resource inventory from Security Hub V2's `GetResourcesV2` API
     "resource_category": "AI/ML",
     "resource_sub_category": "Agent",
     "region": "us-east-1",
-    "account_id": "791024703744",
+    "account_id": "12345678910",
     "created_at": "2026-07-11T09:22:41Z",
     "host_resource_type": "AWS::EC2::Instance",
     "model_count": 0,
