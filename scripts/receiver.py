@@ -42,6 +42,9 @@ BUCKET      = os.environ.get("BUCKET")
 # know which sub-block owns the tail
 DEBUG       = os.environ.get("DEBUG", "").lower() in ("true", "1", "yes")
 KMS_KEY_ID  = os.environ.get("ANALYTICS_KMS_KEY")
+# Rows per batch_execute_statement call for inspector_findings. Each row carries a
+# description, so 200 keeps a call well under the Data API request size limit
+INSPECTOR_BATCH_SIZE = 200
 
 AWS_TYPECAST_2  =   {
                         'timestamp'                 :   [
@@ -67,6 +70,7 @@ AWS_TYPECAST_2  =   {
                                                             'created_date',
                                                             'not_after',
                                                             'first_observed_at',
+                                                            'last_observed_at',
                                                             'last_changed_date',
                                                             'association_execution_date',
                                                             'association_success_date',
@@ -974,7 +978,13 @@ class CoreManager:
                                             }
             inspector_fields            =   {
                                                 'account_id', 'finding_arn', 'severity', 'status', 'type', 
-                                                'title', 'description', 'first_observed_at'
+                                                'title', 'description', 'first_observed_at', 'last_observed_at',
+                                                'updated_at', 'fix_available', 'exploit_available',
+                                                'resource_type', 'resource_id', 'resource_name', 'resource_region',
+                                                'package_name', 'package_version', 'package_manager',
+                                                'fixed_in_version', 'remediation', 'source_url',
+                                                'cve_id', 'cvss_score', 'cvss_severity', 'cvss_version',
+                                                'cvss_vector', 'epss_score', 'cve_count'
                                             }
             finding_fields              =   {
                                                 'security_id', 'finding_id', 'service', 'title', 'description',
@@ -1122,8 +1132,10 @@ class CoreManager:
                     filtered_finding['account_id'] = self.curr_acct['id']
                     inspector_rows.append(filtered_finding)
 
-                if inspector_rows:
-                    self.db.batch_upsert('inspector_findings', inspector_rows, 'finding_arn', self.stats)
+                # The sender ships every ACTIVE finding, which runs to thousands per
+                # account, so load in chunks to stay inside the Data API request limits
+                for i in range(0, len(inspector_rows), INSPECTOR_BATCH_SIZE):
+                    self.db.batch_upsert('inspector_findings', inspector_rows[i:i + INSPECTOR_BATCH_SIZE], 'finding_arn', self.stats)
             self.set_log(log_type=AWSLogType.SUCCESS, topic=AWSResourceType.SECURITY, msg="Inspector Loaded")
             _lap("inspector")
 

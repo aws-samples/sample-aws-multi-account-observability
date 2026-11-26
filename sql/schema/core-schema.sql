@@ -501,6 +501,27 @@ CREATE TABLE inspector_findings (
     description TEXT,
     first_observed_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_observed_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    fix_available VARCHAR(20),
+    exploit_available VARCHAR(20),
+    resource_type VARCHAR(100),
+    resource_id VARCHAR(512),
+    resource_name VARCHAR(512),
+    resource_region VARCHAR(50),
+    package_name TEXT,
+    package_version VARCHAR(255),
+    package_manager VARCHAR(50),
+    fixed_in_version VARCHAR(255),
+    remediation TEXT,
+    source_url TEXT,
+    cve_id VARCHAR(100),
+    cvss_score NUMERIC(4,1),
+    cvss_severity VARCHAR(20),
+    cvss_version VARCHAR(10),
+    cvss_vector VARCHAR(255),
+    epss_score NUMERIC(8,6),
+    cve_count INTEGER NOT NULL DEFAULT 0,
     UNIQUE (finding_arn)
 );
 
@@ -967,3 +988,9 @@ CREATE INDEX idx_ai_inventory_account_id ON ai_inventory(account_id);
 CREATE INDEX idx_ai_inventory_resource_type ON ai_inventory(resource_type);
 CREATE INDEX idx_ai_inventory_resource_id ON ai_inventory(resource_id);
 CREATE INDEX idx_ai_inventory_status ON ai_inventory(status);
+
+-- Inspector findings - CVE lookups
+CREATE INDEX idx_inspector_findings_account_id ON inspector_findings(account_id);
+CREATE INDEX idx_inspector_findings_status ON inspector_findings(status);
+CREATE INDEX idx_inspector_findings_cve_id ON inspector_findings(cve_id);
+CREATE INDEX idx_inspector_findings_resource_id ON inspector_findings(resource_id);

@@ -2522,41 +2522,115 @@ class AWSResourceManager:
     
     #6. Fetching data from Inspector
     def get_inspector(self):
+        """
+        Two paginated list_findings passes:
+          1. every ACTIVE finding, whatever its age - a CVE first seen months ago is
+             still present today, so a date window would hide it
+          2. findings that left ACTIVE (CLOSED / SUPPRESSED) inside the collection
+             window, so the receiver's upsert flips their stored status
+        A finding_arn appears in at most one pass. Each row carries the affected
+        resource and package, so "which CVEs are on which resource" is answerable
+        from the table alone.
+        """
         try:
             inspector = boto3.client('inspector2', region_name=REGION)
-            
-            start_date_aware, end_date_aware = self._get_timezone_aware_dates()
-            
-            response            = AWSResponse(inspector.list_findings())
-            filtered_findings   = []
-            
-            for finding in response.data.get('findings', []):
-                first_observed  = finding.get('firstObservedAt')
-                last_observed   = finding.get('lastObservedAt')
-                updated_at      = finding.get('updatedAt')
-                #print(json.dumps(finding, indent=2, default=str))
-                # Filter findings observed or updated within date range
-                if (first_observed and start_date_aware <= first_observed <= end_date_aware) or \
-                   (last_observed and start_date_aware <= last_observed <= end_date_aware) or \
-                   (updated_at and start_date_aware <= updated_at <= end_date_aware):
-                    
-                    filtered_findings.append({
-                                                'finding_arn'       : finding.get('findingArn'),
-                                                'severity'          : finding.get('severity'),
-                                                'status'            : finding.get('status'),
-                                                'type'              : finding.get('type'),
-                                                'title'             : finding.get('title'),
-                                                'description'       : finding.get('description'),
-                                                'first_observed_at' : first_observed,
-                                                'last_observed_at'  : last_observed,
-                                                'updated_at'        : updated_at,
-                                                **self._extract_cvss_inspector(finding)
-                                            })
+            paginator = inspector.get_paginator('list_findings')
 
-            return filtered_findings
+            start_date_aware, end_date_aware = self._get_timezone_aware_dates()
+
+            passes = [
+                {'findingStatus': [{'comparison': 'EQUALS', 'value': 'ACTIVE'}]},
+                {
+                    'findingStatus' : [{'comparison': 'NOT_EQUALS', 'value': 'ACTIVE'}],
+                    'updatedAt'     : [{'startInclusive': start_date_aware, 'endInclusive': end_date_aware}]
+                }
+            ]
+
+            findings    = []
+            seen        = set()
+            for criteria in passes:
+                for page in paginator.paginate(filterCriteria=criteria, PaginationConfig={'PageSize': 100}):
+                    for finding in page.get('findings', []):
+                        arn = finding.get('findingArn')
+                        if not arn or arn in seen:
+                            continue
+                        seen.add(arn)
+                        findings.append({
+                                            'finding_arn'       : arn,
+                                            'severity'          : finding.get('severity'),
+                                            'status'            : finding.get('status'),
+                                            'type'              : finding.get('type'),
+                                            'title'             : finding.get('title'),
+                                            'description'       : finding.get('description'),
+                                            'first_observed_at' : finding.get('firstObservedAt'),
+                                            'last_observed_at'  : finding.get('lastObservedAt'),
+                                            'updated_at'        : finding.get('updatedAt'),
+                                            'fix_available'     : finding.get('fixAvailable'),
+                                            'exploit_available' : finding.get('exploitAvailable'),
+                                            **self._extract_resource_inspector(finding),
+                                            **self._extract_package_inspector(finding),
+                                            **self._extract_cvss_inspector(finding)
+                                        })
+
+            return findings
         except Exception as e:
             self.set_log(def_type=AWSResourceType.SECURITY, status="Fail", value={'inspector': str(e)})
             return []
+
+    @staticmethod
+    def _extract_resource_inspector(finding):
+        """
+        First resource on the finding (Inspector findings carry exactly one).
+        resource_name is the label a person recognises: the EC2 Name tag, the ECR
+        repository:tag, or the Lambda function name. Falls back to the resource id.
+        """
+        resources   = finding.get('resources') or []
+        resource    = resources[0] if resources and isinstance(resources[0], dict) else {}
+        details     = resource.get('details') or {}
+        tags        = resource.get('tags') or {}
+        r_type      = resource.get('type') or ''
+        r_id        = resource.get('id') or ''
+
+        name = ''
+        if r_type == 'AWS_EC2_INSTANCE':
+            name = tags.get('Name', '')
+        elif r_type == 'AWS_ECR_CONTAINER_IMAGE':
+            image       = details.get('awsEcrContainerImage') or {}
+            repo        = image.get('repositoryName') or ''
+            image_tags  = image.get('imageTags') or []
+            name        = f"{repo}:{image_tags[0]}" if repo and image_tags else repo
+        elif r_type == 'AWS_LAMBDA_FUNCTION':
+            name = (details.get('awsLambdaFunction') or {}).get('functionName', '')
+
+        return {
+                    'resource_type'     : r_type,
+                    'resource_id'       : r_id,
+                    'resource_name'     : name or r_id,
+                    'resource_region'   : resource.get('region', '')
+                }
+
+    @staticmethod
+    def _extract_package_inspector(finding):
+        """
+        Package fields for PACKAGE_VULNERABILITY findings; empty for network and
+        code findings. When several packages are listed (same CVE in more than one
+        package on the resource) the first is kept and the rest are named in
+        package_name so nothing is hidden.
+        """
+        details     = finding.get('packageVulnerabilityDetails') or {}
+        packages    = [p for p in (details.get('vulnerablePackages') or []) if isinstance(p, dict)]
+        first       = packages[0] if packages else {}
+        names       = list(dict.fromkeys(p.get('name', '') for p in packages if p.get('name')))
+
+        return {
+                    'package_name'      : ', '.join(names),
+                    'package_version'   : first.get('version', ''),
+                    'package_manager'   : first.get('packageManager', ''),
+                    'fixed_in_version'  : first.get('fixedInVersion', ''),
+                    'remediation'       : first.get('remediation', '') or
+                                          ((finding.get('remediation') or {}).get('recommendation') or {}).get('text', ''),
+                    'source_url'        : details.get('sourceUrl', '')
+                }
 
     def _extract_cvss_inspector(self, finding):
         empty = {
