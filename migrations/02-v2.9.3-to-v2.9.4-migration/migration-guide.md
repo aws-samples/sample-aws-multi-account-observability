@@ -47,9 +47,28 @@ A sender with many findings now sends a larger payload (about 2 KB per finding, 
 
 ---
 
-## 4. Refresh Quick Datasets
+## 4. Import the Updated Dashboard Template
 
-The dashboard template does not use Inspector data. If you built your own dataset on `view_inspector_findings`, refresh it so the new columns appear.
+`quicksuite/A360-Sample-Template.qs` has a new **Vulnerabilities** sheet, after Security:
+
+| Visual | Dataset | Shows |
+|---|---|---|
+| KPIs | `view_inspector_cves`, `view_inspector_findings` | Open CVEs, critical CVEs, high CVEs, CVEs with a fix, affected resources |
+| CVEs by Account | `view_inspector_cves` | Open CVEs per account, stacked by severity |
+| Findings by Resource Type | `view_inspector_findings` | Open findings on EC2, ECR and Lambda |
+| Top 10 Resources by Critical and High CVEs | `view_inspector_findings` | The resources to patch first |
+| CVEs to Fix First | `view_inspector_cves` | One row per CVE, sorted by EPSS, with fix and exploit availability, affected resources and packages |
+| CVEs by Resource | `view_inspector_findings` | Each CVE on each resource, with installed and fixed-in package versions |
+
+The sheet uses the same Product, Category, Environment and Account dropdowns as the other sheets. It has no date pickers, because it shows the current open CVEs.
+
+To get it:
+
+1. Run section 2 first, so both views exist. The import reads each view's columns from the database.
+2. Upload the new `A360-Sample-Template.qs` to the S3 location your `A360-QS-Migration` stack points at, then run the `<stack-name>-qs-migration` Lambda from its **Test** tab, as in "Step 7: Migrate Analysis" of the [Option A](../../docs/option-a-serverless-deployment.md#step-7-migrate-analysis) or [Option B](../../docs/option-b-ec2-deployment.md#step-7-migrate-analysis) deployment guide. It creates the two new datasets, reuses the existing ones by name, and imports the template as a new analysis.
+3. Optional: copy the Vulnerabilities sheet into your existing analysis, then delete the newly imported one.
+
+If you built your own dataset on `view_inspector_findings`, refresh it so the new columns appear.
 
 ---
 
@@ -86,7 +105,7 @@ FROM inspector_findings GROUP BY status, type ORDER BY status, type;
 -- Top CVEs to fix first
 SELECT account_full, cve_id, severity, cvss_score, epss_score, affected_resources, resource_names
 FROM view_inspector_cves
-WHERE severity IN ('CRITICAL', 'HIGH') AND fix_available
+WHERE severity IN ('CRITICAL', 'HIGH') AND fix_available = 'YES'
 ORDER BY epss_score DESC NULLS LAST LIMIT 20;
 ```
 

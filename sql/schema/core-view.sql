@@ -1436,8 +1436,8 @@ FROM (
         STRING_AGG(DISTINCT resource_type, ', ') AS resource_types,
         STRING_AGG(DISTINCT resource_name, ', ') AS resource_names,
         STRING_AGG(DISTINCT package_name, ', ') AS packages,
-        BOOL_OR(fix_available IN ('YES', 'PARTIAL')) AS fix_available,
-        BOOL_OR(exploit_available = 'YES') AS exploit_available,
+        CASE WHEN BOOL_OR(fix_available IN ('YES', 'PARTIAL')) THEN 'YES' ELSE 'NO' END AS fix_available,
+        CASE WHEN BOOL_OR(exploit_available = 'YES') THEN 'YES' ELSE 'NO' END AS exploit_available,
         MIN(first_observed_at) AS first_observed_at,
         MAX(last_observed_at) AS last_observed_at,
         MAX(source_url) AS source_url

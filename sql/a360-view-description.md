@@ -1335,8 +1335,8 @@ the resolve UPDATE (`IS DISTINCT FROM 'INACTIVE'`).
 | resource_types | TEXT | Resource types, comma-separated |
 | resource_names | TEXT | Resource names, comma-separated |
 | packages | TEXT | Vulnerable packages, comma-separated |
-| fix_available | BOOLEAN | A fix exists for at least one finding |
-| exploit_available | BOOLEAN | A known exploit exists |
+| fix_available | TEXT | YES when a fix exists for at least one finding |
+| exploit_available | TEXT | YES when a known exploit exists |
 | first_observed_at | TIMESTAMP | Earliest first observation |
 | last_observed_at | TIMESTAMP | Latest observation |
 | source_url | TEXT | Vendor advisory URL |
@@ -1501,7 +1501,7 @@ ORDER BY related_exposures DESC, ai.total_ai_count DESC;
 SELECT account_full, cve_id, severity, cvss_score, epss_score,
        affected_resources, resource_names, packages
 FROM view_inspector_cves
-WHERE severity IN ('CRITICAL', 'HIGH') AND fix_available
+WHERE severity IN ('CRITICAL', 'HIGH') AND fix_available = 'YES'
 ORDER BY epss_score DESC NULLS LAST, cvss_score DESC
 LIMIT 20;
 ```
