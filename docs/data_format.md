@@ -291,6 +291,20 @@ Comprehensive security findings from multiple AWS security services.
   - `cvss_vector` (string): Full vector string from the chosen `cvss[]` entry.
   - `epss_score` (float, nullable): EPSS probability (0.0–1.0) from `epss.score`. NULL when absent.
   - `cve_count` (integer): 1 for the finding's CVE, plus every entry in `relatedVulnerabilities[]` (vendor advisories for the same CVE, e.g. ALAS ids counted alongside).
+  - `fix_available` (string): `YES`, `NO` or `PARTIAL`, from `fixAvailable`.
+  - `exploit_available` (string): `YES` or `NO`, from `exploitAvailable`.
+  - `resource_type` (string): `AWS_EC2_INSTANCE`, `AWS_ECR_CONTAINER_IMAGE`, `AWS_LAMBDA_FUNCTION` and so on.
+  - `resource_id` (string): Instance ID, image ARN or function ARN.
+  - `resource_name` (string): EC2 `Name` tag, ECR `repository:tag` or Lambda function name. Falls back to `resource_id`.
+  - `resource_region` (string): Region of the affected resource.
+  - `package_name` (string): Vulnerable package. Several packages are comma-separated. Empty for findings Inspector reports without a package (for example Windows KB-based CVEs) and for network and code findings.
+  - `package_version` (string): Installed version of the first package.
+  - `package_manager` (string): `OS`, `JAVA`, `PYTHON`, `NODE` and so on.
+  - `fixed_in_version` (string): Version that fixes the first package.
+  - `remediation` (string): Package remediation text, else the finding's recommendation text.
+  - `source_url` (string): Vendor advisory URL.
+
+**Collection scope:** every `ACTIVE` finding is sent on every run, whatever its age, so the table always holds the full current CVE list. Findings that left `ACTIVE` (`CLOSED`, `SUPPRESSED`) inside the collection window are sent too, so the upsert flips their stored `status`. Both passes page through `list_findings` to the end.
 
 **CVSS provenance:** Scoring lives here, not on the legacy ASFF Security Hub path. Reason: Security Hub aggregates Inspector, so the only ASFF findings carrying a `Vulnerabilities` array are Inspector's own — putting scores in both places double-counted the same vulnerability across two tables. `_extract_cvss_inspector` in `sender.py` reads the native inspector2 shape (`packageVulnerabilityDetails.cvss[]`, `packageVulnerabilityDetails.vulnerabilityId`, `epss.score`, `inspectorScore`) rather than the ASFF shape.
 
@@ -707,6 +721,7 @@ s3://analytics-bucket/data/123456789101/ap-southeast-1/2026-01-08_DAILY.json
 
 ## Version History
 
+- **v2.9.4** (November 2026): Inspector findings keep their CVE, CVSS/EPSS, affected resource, package and fix fields in `inspector_findings`; the sender pages through every `ACTIVE` finding plus findings closed in the window; new `view_inspector_cves` summary view (one row per CVE per account and region).
 - **v2.9.3** (August 2026): Security Hub V2 (OCSF) exposures/threats/contributor/trait chain, security standards daily snapshots for score trending, AI/ML resource inventory from `GetResourcesV2`, CVSS/EPSS scoring moved from ASFF Security Hub path onto native `inspector2` findings, per-contributor `status`/`workflow_state` fields, resolve-close lifecycle for exposures and threats with cross-exposure `NOT EXISTS` protection for shared contributors, receiver `INSERT ... ON CONFLICT ... RETURNING xmax = 0` rewrite (733s → 21s runtime, ~35× faster).
 - **v2.x** (January 2026): Added multi-region support, support tickets, enhanced compliance tracking
 - **v1.x** (Pre-January 2026): Initial version with basic observability features

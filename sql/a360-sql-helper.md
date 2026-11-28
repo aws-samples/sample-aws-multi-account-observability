@@ -4,6 +4,8 @@
 Copy paste it in the quyery editor to remove the views
 
 ```
+-- v2.9.4 additions
+DROP VIEW IF EXISTS view_inspector_cves;
 -- v2.9.3 additions (drop children before parents in the exposure chain)
 DROP VIEW IF EXISTS view_exposure_finding_trait;
 DROP VIEW IF EXISTS view_exposure_contributed_finding;

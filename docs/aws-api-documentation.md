@@ -58,7 +58,7 @@
 | **Secrets Manager** | `list_secrets()` | `get_secrets_security()` | Secret metadata and rotation | Date filtering for recent activity |
 | **ACM** | `list_certificates()` | `get_certificate_security()` | Certificate ARNs and domains | All certificates regardless of date |
 | **ACM** | `describe_certificate()` | `get_certificate_security()` | Expiration and validation details | Per-certificate detailed info |
-| **Inspector v2** | `list_findings()` | `get_inspector()` | Vulnerability findings | Date range filtering |
+| **Inspector v2** | `list_findings()` | `get_inspector()` | Vulnerability findings with CVE, resource and package | Paginated; every ACTIVE finding, plus findings closed in the date range |
 | **Support** | `describe_trusted_advisor_checks()` | `get_trusted_advisor()` | Available check categories | English language only |
 | **Support** | `describe_trusted_advisor_check_result()` | `get_trusted_advisor()` | Check results and recommendations | Only warning/error status checks |
 | **Application Signals** | `list_services()` | `get_application_signals()` | Service metrics and attributes | 24-hour time limit adjustment |

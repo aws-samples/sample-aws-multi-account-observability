@@ -1404,3 +1404,52 @@ FROM
         ORDER BY account_id, id
     ) pa ON a.id = pa.account_id
     LEFT JOIN products p ON pa.product_id = p.id;
+
+--49. Inspector CVE summary view - one row per CVE per account and region, ACTIVE findings only
+CREATE OR REPLACE VIEW view_inspector_cves AS
+SELECT
+    c.*,
+    a.account_id as account,
+    a.region as account_region,
+    a.account_name,
+    a.account_type,
+    a.category as account_category,
+    a.account_status as account_status,
+    a.partner_name as account_partner,
+    a.customer_name as account_customer,
+    CONCAT(a.account_id, '-', a.account_name) as account_full,
+    p.name as project_product_name
+FROM (
+    SELECT
+        account_id,
+        cve_id,
+        -- Worst Inspector severity across the CVE's findings
+        (ARRAY['CRITICAL','HIGH','MEDIUM','LOW','INFORMATIONAL','UNTRIAGED'])[
+            MIN(CASE severity
+                    WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3
+                    WHEN 'LOW' THEN 4 WHEN 'INFORMATIONAL' THEN 5 ELSE 6 END)
+        ] AS severity,
+        MAX(cvss_score) AS cvss_score,
+        MAX(epss_score) AS epss_score,
+        COUNT(*) AS finding_count,
+        COUNT(DISTINCT resource_id) AS affected_resources,
+        STRING_AGG(DISTINCT resource_type, ', ') AS resource_types,
+        STRING_AGG(DISTINCT resource_name, ', ') AS resource_names,
+        STRING_AGG(DISTINCT package_name, ', ') AS packages,
+        CASE WHEN BOOL_OR(fix_available IN ('YES', 'PARTIAL')) THEN 'YES' ELSE 'NO' END AS fix_available,
+        CASE WHEN BOOL_OR(exploit_available = 'YES') THEN 'YES' ELSE 'NO' END AS exploit_available,
+        MIN(first_observed_at) AS first_observed_at,
+        MAX(last_observed_at) AS last_observed_at,
+        MAX(source_url) AS source_url
+    FROM inspector_findings
+    WHERE status = 'ACTIVE'
+      AND cve_id IS NOT NULL AND cve_id <> ''
+    GROUP BY account_id, cve_id
+) c
+    JOIN accounts a ON c.account_id = a.id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id) account_id, product_id
+        FROM product_accounts
+        ORDER BY account_id, id
+    ) pa ON a.id = pa.account_id
+    LEFT JOIN products p ON pa.product_id = p.id;

@@ -625,7 +625,7 @@ Same as view_products plus all common account attributes.
 ## 27. view_inspector_findings
 **Purpose**: Amazon Inspector vulnerability findings  
 **Base Table**: inspector_findings  
-**Use Case**: Vulnerability assessment, remediation
+**Use Case**: Vulnerability assessment, remediation, CVE lookup by resource
 
 ### Attributes
 | Attribute | Type | Description |
@@ -640,6 +640,29 @@ Same as view_products plus all common account attributes.
 | description | TEXT | Finding description |
 | first_observed_at | TIMESTAMP | First observation time |
 | created_at | TIMESTAMP | Record creation time |
+| last_observed_at | TIMESTAMP | Last time Inspector saw the finding |
+| updated_at | TIMESTAMP | Last time Inspector updated the finding |
+| fix_available | VARCHAR(20) | YES, NO or PARTIAL |
+| exploit_available | VARCHAR(20) | YES or NO |
+| resource_type | VARCHAR(100) | AWS_EC2_INSTANCE, AWS_ECR_CONTAINER_IMAGE, AWS_LAMBDA_FUNCTION, ... |
+| resource_id | VARCHAR(512) | Instance ID, image ARN or function ARN |
+| resource_name | VARCHAR(512) | EC2 Name tag, ECR repository:tag or Lambda function name |
+| resource_region | VARCHAR(50) | Region of the affected resource |
+| package_name | TEXT | Vulnerable package(s), comma-separated |
+| package_version | VARCHAR(255) | Installed version |
+| package_manager | VARCHAR(50) | OS, JAVA, PYTHON, NODE, ... |
+| fixed_in_version | VARCHAR(255) | Version that fixes the package |
+| remediation | TEXT | Remediation text |
+| source_url | TEXT | Vendor advisory URL |
+| cve_id | VARCHAR(100) | CVE (or vendor advisory) identifier |
+| cvss_score | NUMERIC(4,1) | Environment-adjusted CVSS score |
+| cvss_severity | VARCHAR(20) | Band derived from cvss_score |
+| cvss_version | VARCHAR(10) | CVSS spec version |
+| cvss_vector | VARCHAR(255) | CVSS vector string |
+| epss_score | NUMERIC(8,6) | EPSS exploit probability (0-1) |
+| cve_count | INTEGER | CVE plus related vendor advisories on the finding |
+
+Every ACTIVE finding is reloaded on each run, so `WHERE status = 'ACTIVE'` is the current CVE list.
 
 ---
 
@@ -1294,6 +1317,32 @@ the resolve UPDATE (`IS DISTINCT FROM 'INACTIVE'`).
 | created_at | TIMESTAMP | When the resource was first seen |
 | updated_at | TIMESTAMP | When status last changed |
 
+## 49. view_inspector_cves
+**Purpose**: Current CVEs, one row per CVE per account and region  
+**Base Table**: inspector_findings (status = 'ACTIVE', cve_id not empty)  
+**Use Case**: "Which CVEs do we have?", CVE prioritisation, Quick chat questions
+
+### Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| account_id | INTEGER | Foreign key to accounts |
+| cve_id | VARCHAR(100) | CVE identifier |
+| severity | TEXT | Worst Inspector severity across the CVE's findings |
+| cvss_score | NUMERIC | Highest CVSS score |
+| epss_score | NUMERIC | Highest EPSS score |
+| finding_count | BIGINT | Active findings for the CVE |
+| affected_resources | BIGINT | Distinct resources carrying the CVE |
+| resource_types | TEXT | Resource types, comma-separated |
+| resource_names | TEXT | Resource names, comma-separated |
+| packages | TEXT | Vulnerable packages, comma-separated |
+| fix_available | TEXT | YES when a fix exists for at least one finding |
+| exploit_available | TEXT | YES when a known exploit exists |
+| first_observed_at | TIMESTAMP | Earliest first observation |
+| last_observed_at | TIMESTAMP | Latest observation |
+| source_url | TEXT | Vendor advisory URL |
+
+Plus the standard account columns (`account`, `account_name`, `account_full`, `project_product_name`, ...).
+
 ---
 
 ## Appendix: Query Examples
@@ -1447,11 +1496,21 @@ GROUP BY ai.account_full, ai.resource_type, ai.resource_name,
 ORDER BY related_exposures DESC, ai.total_ai_count DESC;
 ```
 
+### Example 10: Critical and high CVEs with a fix, most likely to be exploited first
+```sql
+SELECT account_full, cve_id, severity, cvss_score, epss_score,
+       affected_resources, resource_names, packages
+FROM view_inspector_cves
+WHERE severity IN ('CRITICAL', 'HIGH') AND fix_available = 'YES'
+ORDER BY epss_score DESC NULLS LAST, cvss_score DESC
+LIMIT 20;
+```
+
 ---
 
 ## Document Information
-- **Version**: 2.9.3
-- **Last Updated**: 2026-08
-- **Total Views**: 48
+- **Version**: 2.9.4
+- **Last Updated**: 2026-11
+- **Total Views**: 49
 - **Database**: PostgreSQL (Aurora Serverless v2)
 
